@@ -31,7 +31,7 @@ create_or_update_job() {
       --schedule="$schedule" \
       --uri="$uri" \
       --http-method=POST \
-      --headers="Authorization=Bearer ${INTERNAL_API_SECRET}" \
+      --update-headers="Authorization=Bearer ${INTERNAL_API_SECRET}" \
       --time-zone="UTC" \
       --quiet
   else
