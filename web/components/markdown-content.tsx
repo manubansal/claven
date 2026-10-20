@@ -15,6 +15,7 @@ export function MarkdownContent({ content }: { content: string }) {
         ul: ({ children }) => <ul className="text-sm text-muted-foreground mb-3 ml-4 list-disc space-y-1">{children}</ul>,
         li: ({ children }) => <li className="leading-relaxed">{children}</li>,
         code: ({ children }) => <code className="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">{children}</code>,
+        a: ({ href, children }) => <a href={href} className="underline underline-offset-2 hover:text-foreground">{children}</a>,
         strong: ({ children }) => <strong className="text-foreground font-medium">{children}</strong>,
         table: ({ children }) => <div className="overflow-x-auto mb-3"><table className="w-full text-sm border-collapse">{children}</table></div>,
         thead: ({ children }) => <thead className="border-b border-border">{children}</thead>,

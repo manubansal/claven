@@ -56,6 +56,10 @@ function HomeContent() {
       <a href="/how-it-works" className="text-sm text-muted-foreground hover:text-foreground mt-2">
         How it works
       </a>
+      <nav className="flex gap-4 text-xs text-muted-foreground">
+        <a href="/privacy" className="hover:text-foreground">Privacy</a>
+        <a href="/terms" className="hover:text-foreground">Terms</a>
+      </nav>
     </div>
   );
 }
