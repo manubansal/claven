@@ -13,3 +13,5 @@ web/docs/
 web/app/how-it-works/content.ts
 web/.open-next/
 .env.local
+.venv/
+.env.test
