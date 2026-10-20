@@ -577,14 +577,14 @@ Use shadcn templates ([ui.shadcn.com/templates](https://ui.shadcn.com/templates)
 - [ ] Adapt a shadcn template for the landing page (hero, features, CTA)
 - [ ] Move `/how-it-works` into the marketing layout
 - [ ] Add pricing page (when ready)
-- [ ] Add privacy policy and terms of service pages
+- [x] Add privacy policy and terms of service pages
 - [ ] Ensure marketing layout header adapts: public shows nav + "Sign in", authenticated shows account actions
 - [ ] Keep content as markdown, rendering via `react-markdown` + `remark-gfm`
 - [ ] Same Tailwind tokens and shadcn components across marketing and app — one design system
 
 ## Google's App Verification
 
-- [ ] Add a privacy policy and terms of service page (required before submitting for verification)
+- [x] Add a privacy policy and terms of service page (required before submitting for verification)
 - [ ] Submit the OAuth app for Google verification — `gmail.modify` is a restricted scope; unverified apps are capped at 100 users
 - [ ] Plan for the CASA Tier 2 security assessment (required for sensitive Gmail scopes in production)
 

@@ -1,4 +1,4 @@
-import { MarkdownContent } from "./markdown-content";
+import { MarkdownContent } from "@/components/markdown-content";
 import md from "./content";
 
 export default function HowItWorksPage() {
