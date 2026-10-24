@@ -79,6 +79,7 @@ jobs:
           image: ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/claven/server:${{ github.sha }}
           secrets: |-
             DATABASE_URL=database-url:latest
+            DATABASE_URL_DIRECT=database-url-direct:latest
             TOKEN_ENCRYPTION_KEY=token-encryption-key:latest
             OAUTH_CLIENT_SECRET=oauth-client-secret:latest
             INTERNAL_API_SECRET=internal-api-secret:latest

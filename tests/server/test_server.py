@@ -1787,6 +1787,35 @@ class TestApiEvents:
                 response = client.get("/api/events")
         assert response.status_code == 503
 
+    def test_listen_uses_direct_url_when_set(self):
+        # PgBouncer (transaction mode) silently drops LISTEN, so the SSE
+        # connection must go to the direct host when one is configured.
+        token = _make_session_token()
+        env = {**_ENV, "DATABASE_URL": "postgresql://pooled", "DATABASE_URL_DIRECT": "postgresql://direct"}
+        with patch.dict("os.environ", env), \
+                patch("psycopg2.connect", side_effect=RuntimeError("no db")) as mock_connect:
+            with TestClient(app) as client:
+                client.cookies.set("session", token)
+                response = client.get("/api/events")
+        assert response.status_code == 503
+        # Regular queries stay on the pooler; only the LISTEN connection goes direct.
+        assert mock_connect.call_args_list[-1].args == ("postgresql://direct",)
+
+
+class TestListenDatabaseUrl:
+    def test_prefers_direct_url(self):
+        from claven.routes.api import _listen_database_url
+        env = {"DATABASE_URL": "postgresql://pooled", "DATABASE_URL_DIRECT": "postgresql://direct"}
+        with patch.dict("os.environ", env):
+            assert _listen_database_url() == "postgresql://direct"
+
+    def test_falls_back_to_database_url(self):
+        import os
+        from claven.routes.api import _listen_database_url
+        with patch.dict("os.environ", {"DATABASE_URL": "postgresql://pooled"}):
+            os.environ.pop("DATABASE_URL_DIRECT", None)
+            assert _listen_database_url() == "postgresql://pooled"
+
 
 # ── Graceful shutdown tests ──────────────────────────────────────────────────
 

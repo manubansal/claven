@@ -363,6 +363,22 @@ def api_config():
     return {"labels": config.get("labels", [])}
 
 
+def _listen_database_url() -> str:
+    """Connection string for the SSE LISTEN connection.
+
+    DATABASE_URL points at Neon's PgBouncer pooler (transaction mode), which
+    accepts LISTEN but never delivers notifications. DATABASE_URL_DIRECT is
+    the non-pooled host; fall back to DATABASE_URL for local dev and CI,
+    where there is no pooler.
+    """
+    direct = os.environ.get("DATABASE_URL_DIRECT")
+    if direct:
+        logger.debug("_listen_database_url: using DATABASE_URL_DIRECT")
+        return direct
+    logger.debug("_listen_database_url: DATABASE_URL_DIRECT unset, using DATABASE_URL")
+    return os.environ["DATABASE_URL"]
+
+
 @router.get("/api/events")
 async def api_events(request: Request):
     """Server-Sent Events endpoint for live scan progress.
@@ -388,7 +404,7 @@ async def api_events(request: Request):
     user_id = session["user_id"]
 
     def _open_listen_conn():
-        conn = psycopg2.connect(os.environ["DATABASE_URL"])
+        conn = psycopg2.connect(_listen_database_url())
         conn.set_isolation_level(pg_ext.ISOLATION_LEVEL_AUTOCOMMIT)
         with conn.cursor() as cur:
             cur.execute("LISTEN scan_progress")
