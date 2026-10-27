@@ -1,6 +1,6 @@
 import { CONTACT_EMAIL, OPERATOR_NAME } from "@/lib/constants";
 
-export const LAST_UPDATED = "October 20, 2026";
+export const LAST_UPDATED = "October 27, 2026";
 
 const content = `# Privacy Policy
 
@@ -17,14 +17,14 @@ Claven's use and transfer of information received from Google APIs to any other 
 When you sign in with Google, Claven asks for:
 
 - **openid** and **userinfo.email** — to identify your account by its email address.
-- **gmail.modify** — to read message headers, create Claven's labels, apply and remove those labels on your messages, and (only if you enable auto-archive) move messages from unknown senders out of your inbox.
+- **gmail.modify** — to read the sender and recipient headers of messages, create Claven's labels, apply and remove those labels on your messages, and (only if you enable auto-archive) move messages from unknown senders out of your inbox.
 
 Claven never sends, deletes, or drafts email on your behalf.
 
 ## What data Claven accesses
 
 - **Your email address**, from your Google account.
-- **Message metadata** — the From, To, Cc, Bcc, and Subject headers of messages, plus their message IDs and existing label IDs. Claven requests messages in Gmail's metadata format and **never reads message bodies or attachments**.
+- **Message metadata** — the From, To, Cc, and Bcc headers of messages, plus their message IDs, dates, and existing label IDs. Claven requests messages in Gmail's metadata format and **never reads subject lines, message bodies, or attachments**.
 - **Your Gmail labels**, so Claven can find or create its own labels.
 - **Mailbox change notifications** from Gmail, which tell Claven when new mail arrives.
 
@@ -35,6 +35,8 @@ Claven uses Google user data only to provide the labeling feature you see in the
 - It scans your Sent mail to build a list of addresses you have written to ("known senders").
 - When new mail arrives, it compares the sender against your known senders and your label rules, then applies the matching label.
 - If you turn on auto-archive, it removes unknown-sender messages from your inbox (they stay in All Mail with their label).
+
+Claven does not create aggregated or anonymized datasets from Google user data. The data it derives (your known-senders list and the counts shown on your dashboard) is per-user, shown only to you, and never combined across users or shared.
 
 Claven does **not**:
 
@@ -53,7 +55,7 @@ Claven does **not**:
 - your settings (scan scope, auto-archive);
 - a short activity log shown on your dashboard (the most recent 100 entries).
 
-Claven does not store message bodies, attachments, or subject lines in its database. Message IDs and subject lines may appear in operational server logs, which are kept by our hosting provider for a limited period (normally 30 days) for debugging and security.
+Claven does not store message bodies, attachments, or subject lines. Message IDs may appear in operational server logs, which are kept by our hosting provider for a limited period (normally 30 days) for debugging and security.
 
 ## Who processes your data
 

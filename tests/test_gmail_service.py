@@ -135,7 +135,6 @@ def test_get_message_headers_extracts_all_fields():
         "payload": {
             "headers": [
                 {"name": "From", "value": "Alice <alice@example.com>"},
-                {"name": "Subject", "value": "Hello there"},
                 {"name": "To", "value": "bob@example.com"},
             ]
         },
@@ -143,10 +142,22 @@ def test_get_message_headers_extracts_all_fields():
     }
     headers, label_ids = get_message_headers(service, "msg123")
     assert headers["from"] == "Alice <alice@example.com>"
-    assert headers["subject"] == "Hello there"
     assert headers["to"] == "bob@example.com"
     assert "INBOX" in label_ids
     assert "UNREAD" in label_ids
+
+
+def test_get_message_headers_never_requests_subject():
+    # Data minimization: no label rule uses the subject, so it is never fetched.
+    service = mock_service()
+    service.users().messages().get().execute.return_value = {
+        "payload": {"headers": [{"name": "Subject", "value": "Hello there"}]},
+        "labelIds": [],
+    }
+    headers, _ = get_message_headers(service, "msg1")
+    requested = service.users().messages().get.call_args.kwargs["metadataHeaders"]
+    assert "Subject" not in requested
+    assert "subject" not in headers
 
 
 def test_get_message_headers_returns_lowercase_keys():
@@ -493,6 +504,25 @@ class TestBatchGetMessageMetadata:
         assert "to" in headers
         assert "cc" in headers
         assert "from" not in headers  # not in requested headers
+
+
+class TestBatchGetMessageHeaders:
+    def test_never_requests_subject(self):
+        from claven.core.gmail import batch_get_message_headers
+        service = MagicMock()
+        service.new_batch_http_request.return_value = MagicMock()
+        batch_get_message_headers(service, ["m1"])
+        requested = service.users().messages().get.call_args.kwargs["metadataHeaders"]
+        assert "From" in requested
+        assert "Subject" not in requested
+
+    def test_metadata_default_never_requests_subject(self):
+        from claven.core.gmail import batch_get_message_metadata
+        service = MagicMock()
+        service.new_batch_http_request.return_value = MagicMock()
+        batch_get_message_metadata(service, ["m1"])
+        requested = service.users().messages().get.call_args.kwargs["metadataHeaders"]
+        assert "Subject" not in requested
 
 
 class TestBatchApplyLabels:

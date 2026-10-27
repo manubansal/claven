@@ -40,12 +40,7 @@ def process_message(service, message_id, label_configs, label_id_cache, known_se
             gmail_label_id = label_id_cache.get(apply_id)
             if gmail_label_id and gmail_label_id not in existing_labels:
                 apply_label(service, message_id, gmail_label_id)
-                logger.info(
-                    "Labeled message %s (%s) as '%s'",
-                    message_id,
-                    headers.get("subject", ""),
-                    apply_id,
-                )
+                logger.info("Labeled message %s as '%s'", message_id, apply_id)
                 applied = True
                 # Auto-archive: remove from inbox if labeled unknown-sender
                 if not matched and auto_archive_unknown and "INBOX" in existing_labels:
