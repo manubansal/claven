@@ -13,6 +13,7 @@ An intelligent Gmail labeling service that automatically categorizes incoming em
 - **Resumable scans**: both the inbox scan and sent recipients scan are checkpointed — interrupted scans resume exactly where they left off
 - Both scans are interruptible with `Ctrl+C` and log progress every 10 messages with an accurate `i/total (pct%)` meter
 - Sent recipients full scan fetches all message IDs upfront so the total is known before processing begins
+- **Inbox modes** (SaaS service): pick what happens to unknown-sender mail. **Label only** leaves it in the inbox, **Gatekeeper** archives it on arrival, and **Sunset** leaves it in the inbox with a countdown label and archives it after a timer unless you read or star it. See [How Claven works](docs/how-claven-works.md#inbox-modes).
 - **Automatic reprocessing**: if the known senders list grows between runs, all inbox messages are automatically reprocessed so newly matching emails get labeled correctly
 
 ## Development
