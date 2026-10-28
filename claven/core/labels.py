@@ -2,7 +2,7 @@
 
 c/k   known sender (green)
 c/u   unknown sender (grey)
-c/3d … c/0h   Sunset countdown, calm to urgent: blue, yellow, orange, red
+c/3d … c/1h   Sunset countdown ("gone within"), calm to urgent: blue, yellow, orange, red
 c/s   sent mail already scanned for known senders (hidden)
 """
 
@@ -42,7 +42,6 @@ LABEL_COLORS = {
     "c/12h": _color("#fad165", "#000000"),
     "c/4h": _color("#ffad47", "#000000"),
     "c/1h": _color("#fb4c2f", "#ffffff"),
-    "c/0h": _color("#ac2b16", "#ffffff"),
 }
 
 # Names used by earlier Claven versions. Renaming in place keeps the label on
@@ -56,8 +55,11 @@ LEGACY_NAMES = {
     "sunset/12h left": "c/12h",
     "sunset/4h left": "c/4h",
     "sunset/1h left": "c/1h",
-    "sunset/under 1h left": "c/0h",
 }
+
+# Labels Claven no longer uses; deleted (which removes them from every message).
+# The Sunset sweep puts the right countdown back on mail that had one.
+RETIRED_NAMES = {"c/0h", "sunset/under 1h left"}
 
 
 def label_body(name: str) -> dict:

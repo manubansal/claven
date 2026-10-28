@@ -6,6 +6,7 @@ from claven.core.labels import (
     KNOWN,
     LABEL_COLORS,
     LEGACY_NAMES,
+    RETIRED_NAMES,
     PARENT,
     SENT_SCANNED,
     UNKNOWN,
@@ -24,7 +25,10 @@ class TestNames:
         assert LEGACY_NAMES["known-sender"] == KNOWN
         assert LEGACY_NAMES["unknown-sender"] == UNKNOWN
         assert LEGACY_NAMES["claven/sent-scanned"] == SENT_SCANNED
-        assert LEGACY_NAMES["sunset/under 1h left"] == "c/0h"
+
+    def test_retired_labels(self):
+        # c/0h existed briefly; "under 1h" is now part of c/1h.
+        assert RETIRED_NAMES == {"c/0h", "sunset/under 1h left"}
 
 
 class TestColors:
@@ -34,7 +38,7 @@ class TestColors:
         assert LABEL_COLORS["c/12h"]["backgroundColor"] == "#fad165"  # yellow
         assert LABEL_COLORS["c/4h"]["backgroundColor"] == "#ffad47"   # orange
         assert LABEL_COLORS["c/1h"]["backgroundColor"] == "#fb4c2f"   # red
-        assert LABEL_COLORS["c/0h"]["backgroundColor"] == "#ac2b16"  # dark red
+        assert "c/0h" not in LABEL_COLORS
 
     @pytest.mark.parametrize("name", sorted(LABEL_COLORS))
     def test_colors_are_from_gmail_palette(self, name):

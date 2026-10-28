@@ -2355,3 +2355,34 @@ class TestInternalSunset:
         assert response.status_code == 200
         mock_clear.assert_called_once()
         mock_db.set_sunset_countdown_active.assert_called_once_with(ANY, "uid-9", False)
+
+
+class TestSunsetForLiveLabeling:
+    """Live labeling learns the user's Sunset timer and countdown label ids."""
+
+    def test_sunset_user_gets_timer_and_countdown_ids(self):
+        from datetime import datetime, timezone
+        from claven.core.sunset import COUNTDOWN_LABELS
+        from claven.tasks import _sunset_for_live_labeling
+        changed = datetime(2026, 10, 27, tzinfo=timezone.utc)
+        conn = MagicMock()
+        with patch("claven.server.db") as mock_db, \
+             patch("claven.server.build_label_id_cache",
+                   side_effect=lambda svc, names: {n: f"id-{n}" for n in names}) as mock_cache:
+            mock_db.get_inbox_mode.return_value = {"mode": "sunset", "sunset_hours": 12, "changed_at": changed}
+            sunset = _sunset_for_live_labeling(MagicMock(), conn, "uid-1")
+        assert sunset == {"hours": 12, "changed_at": changed,
+                          "label_ids": {n: f"id-{n}" for n in COUNTDOWN_LABELS}}
+        assert list(mock_cache.call_args.args[1]) == list(COUNTDOWN_LABELS)
+        # Countdown labels may now exist, so leaving Sunset must clean them up.
+        mock_db.set_sunset_countdown_active.assert_called_once_with(conn, "uid-1", True)
+
+    @pytest.mark.parametrize("mode", ["label_only", "gatekeeper"])
+    def test_other_modes_get_none_and_no_labels(self, mode):
+        from claven.tasks import _sunset_for_live_labeling
+        with patch("claven.server.db") as mock_db, \
+             patch("claven.server.build_label_id_cache") as mock_cache:
+            mock_db.get_inbox_mode.return_value = {"mode": mode, "sunset_hours": 24, "changed_at": None}
+            assert _sunset_for_live_labeling(MagicMock(), MagicMock(), "uid-1") is None
+        mock_cache.assert_not_called()
+        mock_db.set_sunset_countdown_active.assert_not_called()

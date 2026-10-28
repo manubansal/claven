@@ -224,4 +224,5 @@ from claven.tasks import (  # noqa: F401, E402
     _run_archive_unknown,
     _run_reset_sent_scan,
     _label_id_cache_for_config,
+    _sunset_for_live_labeling,
 )

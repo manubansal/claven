@@ -1,12 +1,14 @@
 import logging
 
-from claven.core.gmail import get_message_headers, apply_label, gmail_retry, list_history
+from claven.core.gmail import get_message_metadata, apply_label, gmail_retry, list_history
 from claven.core.rules import matches_rule
+from claven.core.sunset import arrival_countdown
 
 logger = logging.getLogger(__name__)
 
 
-def process_message(service, message_id, label_configs, label_id_cache, known_senders=None, auto_archive_unknown=False):
+def process_message(service, message_id, label_configs, label_id_cache, known_senders=None, auto_archive_unknown=False,
+                    sunset=None):
     """Evaluate each label config against a message.
 
     For each label config:
@@ -16,10 +18,14 @@ def process_message(service, message_id, label_configs, label_id_cache, known_se
     This ensures every processed message lands in exactly one state per label
     config: matched, unmatched, or (if no unknown_label configured) unchanged.
 
+    sunset: in Sunset mode, {"hours", "changed_at", "label_ids"}; unread,
+    unstarred unknown-sender inbox mail then gets its first countdown label in
+    the same call as the unknown label. None in other modes.
+
     Returns True if at least one label was newly applied, False otherwise.
     """
     try:
-        headers, existing_labels = get_message_headers(service, message_id)
+        headers, existing_labels, internal_date_ms = get_message_metadata(service, message_id)
     except Exception as exc:
         if "404" in str(exc) or "notFound" in str(exc):
             logger.debug("process_message: message %s not found (deleted?), skipping", message_id)
@@ -39,8 +45,19 @@ def process_message(service, message_id, label_configs, label_id_cache, known_se
         if apply_id:
             gmail_label_id = label_id_cache.get(apply_id)
             if gmail_label_id and gmail_label_id not in existing_labels:
-                apply_label(service, message_id, gmail_label_id)
-                logger.info("Labeled message %s as '%s'", message_id, apply_id)
+                countdown = None
+                if (not matched and sunset and internal_date_ms is not None
+                        and {"INBOX", "UNREAD"} <= set(existing_labels) and "STARRED" not in existing_labels):
+                    countdown = arrival_countdown(internal_date_ms, sunset["hours"], sunset["changed_at"])
+                    logger.debug("process_message: %s waits in Sunset, starting at %s", message_id, countdown)
+                else:
+                    logger.debug("process_message: %s gets no countdown", message_id)
+                if countdown:
+                    apply_label(service, message_id, gmail_label_id, sunset["label_ids"][countdown])
+                    logger.info("Labeled message %s as '%s' with countdown '%s'", message_id, apply_id, countdown)
+                else:
+                    apply_label(service, message_id, gmail_label_id)
+                    logger.info("Labeled message %s as '%s'", message_id, apply_id)
                 applied = True
                 # Auto-archive: remove from inbox if labeled unknown-sender
                 if not matched and auto_archive_unknown and "INBOX" in existing_labels:
@@ -53,7 +70,8 @@ def process_message(service, message_id, label_configs, label_id_cache, known_se
     return applied
 
 
-def poll_new_messages(service, history_id, label_configs, label_id_cache, known_senders=None, auto_archive_unknown=False):
+def poll_new_messages(service, history_id, label_configs, label_id_cache, known_senders=None, auto_archive_unknown=False,
+                      sunset=None):
     """Check for new messages since the last history ID.
 
     Returns the number of messages processed, or None if the history ID had
@@ -79,6 +97,7 @@ def poll_new_messages(service, history_id, label_configs, label_id_cache, known_
     if message_ids:
         logger.info("Processing %d new message(s)", len(message_ids))
         for message_id in message_ids:
-            process_message(service, message_id, label_configs, label_id_cache, known_senders, auto_archive_unknown=auto_archive_unknown)
+            process_message(service, message_id, label_configs, label_id_cache, known_senders,
+                            auto_archive_unknown=auto_archive_unknown, sunset=sunset)
 
     return len(message_ids)
