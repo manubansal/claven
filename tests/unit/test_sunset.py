@@ -104,23 +104,20 @@ from claven.core.sunset import (  # noqa: E402
 
 
 class TestCountdownLabel:
-    def test_labels_are_nested_under_sunset(self):
-        assert COUNTDOWN_LABELS == (
-            "sunset/3d left", "sunset/24h left", "sunset/12h left",
-            "sunset/4h left", "sunset/1h left", "sunset/under 1h left",
-        )
+    def test_labels_are_short_codes_under_c(self):
+        assert COUNTDOWN_LABELS == ("c/3d", "c/24h", "c/12h", "c/4h", "c/1h", "c/0h")
 
     @pytest.mark.parametrize("hours,label", [
-        (80, "sunset/3d left"),
-        (72, "sunset/3d left"),
-        (71.9, "sunset/24h left"),
-        (24, "sunset/24h left"),
-        (13, "sunset/12h left"),
-        (4, "sunset/4h left"),        # "4h left" means at least 4h remain
-        (3.99, "sunset/1h left"),
-        (1, "sunset/1h left"),
-        (0.5, "sunset/under 1h left"),
-        (-1, "sunset/under 1h left"),
+        (80, "c/3d"),
+        (72, "c/3d"),
+        (71.9, "c/24h"),
+        (24, "c/24h"),
+        (13, "c/12h"),
+        (4, "c/4h"),        # "4h left" means at least 4h remain
+        (3.99, "c/1h"),
+        (1, "c/1h"),
+        (0.5, "c/0h"),
+        (-1, "c/0h"),
     ])
     def test_rounds_time_left_down_to_a_step(self, hours, label):
         assert countdown_label(timedelta(hours=hours)) == label
@@ -191,8 +188,17 @@ class TestClearCountdowns:
     def test_deletes_existing_countdown_labels(self):
         service = MagicMock()
         service.users().labels().list().execute.return_value = {"labels": [
-            {"id": "L3", "name": "sunset/4h left"},
-            {"id": "X", "name": "unknown-sender"},
+            {"id": "L3", "name": "c/4h"},
+            {"id": "X", "name": "c/u"},
         ]}
         assert clear_countdowns(service) == 1
         service.users().labels().delete.assert_called_with(userId="me", id="L3")
+
+    def test_also_deletes_countdown_labels_with_old_names(self):
+        service = MagicMock()
+        service.users().labels().list().execute.return_value = {"labels": [
+            {"id": "L3", "name": "sunset/4h left"},
+            {"id": "L9", "name": "c/12h"},
+            {"id": "X", "name": "c/u"},
+        ]}
+        assert clear_countdowns(service) == 2

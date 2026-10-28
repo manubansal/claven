@@ -576,3 +576,102 @@ class TestBatchModifyLabels:
         service = MagicMock()
         batch_modify_labels(service, [], remove_label_ids=["R"])
         assert not [c for c in service.users().messages().batchModify.call_args_list if "body" in c.kwargs]
+
+
+# ---------------------------------------------------------------------------
+# build_label_id_cache / migrate_legacy_labels
+# ---------------------------------------------------------------------------
+
+from googleapiclient.errors import HttpError
+
+from claven.core.gmail import build_label_id_cache, migrate_legacy_labels
+from claven.core.labels import LABEL_COLORS, label_body
+
+
+def _http_error(status):
+    resp = MagicMock(status=status, reason="err")
+    return HttpError(resp, b"{}")
+
+
+class TestMigrateLegacyLabels:
+    def test_renames_old_label_in_place_with_style(self):
+        service = mock_service()
+        labels = [{"name": "c", "id": "P"}, {"name": "unknown-sender", "id": "Label_7"}]
+        result = migrate_legacy_labels(service, labels)
+        service.users().labels().patch.assert_called_once_with(
+            userId="me", id="Label_7", body=label_body("c/u"))
+        assert {"name": "c/u", "id": "Label_7"} in result
+        assert not any(l["name"] == "unknown-sender" for l in result)
+
+    def test_creates_parent_before_renaming(self):
+        service = mock_service()
+        service.users().labels().create().execute.return_value = {"name": "c", "id": "P"}
+        result = migrate_legacy_labels(service, [{"name": "known-sender", "id": "Label_1"}])
+        service.users().labels().create.assert_called_with(userId="me", body=label_body("c"))
+        assert {"name": "c", "id": "P"} in result
+
+    def test_leaves_old_label_alone_when_new_name_taken(self):
+        service = mock_service()
+        labels = [{"name": "c", "id": "P"}, {"name": "known-sender", "id": "L1"}, {"name": "c/k", "id": "L2"}]
+        assert migrate_legacy_labels(service, labels) == labels
+        service.users().labels().patch.assert_not_called()
+
+    def test_no_calls_when_nothing_to_migrate(self):
+        service = mock_service()
+        labels = [{"name": "c/k", "id": "L2"}, {"name": "INBOX", "id": "INBOX"}]
+        assert migrate_legacy_labels(service, labels) == labels
+        service.users().labels().patch.assert_not_called()
+        service.users().labels().create.assert_not_called()
+
+    def test_retries_without_colour_if_gmail_rejects_it(self):
+        service = mock_service()
+        patch_call = service.users().labels().patch
+        patch_call.return_value.execute.side_effect = [_http_error(400), {}]
+        migrate_legacy_labels(service, [{"name": "c", "id": "P"}, {"name": "known-sender", "id": "L1"}])
+        last_body = patch_call.call_args.kwargs["body"]
+        assert last_body["name"] == "c/k" and "color" not in last_body
+
+
+class TestBuildLabelIdCache:
+    def test_uses_renamed_label_id(self):
+        service = mock_service()
+        service.users().labels().list().execute.return_value = {
+            "labels": [{"name": "c", "id": "P"}, {"name": "known-sender", "id": "Label_1"}]
+        }
+        assert build_label_id_cache(service, ["c/k"]) == {"c/k": "Label_1"}
+        service.users().labels().create.assert_not_called()
+
+    def test_creates_missing_label_with_style(self):
+        service = mock_service()
+        service.users().labels().list().execute.return_value = {"labels": [{"name": "c", "id": "P"}]}
+        service.users().labels().create().execute.return_value = {"name": "c/12h", "id": "L9"}
+        assert build_label_id_cache(service, ["c/12h"]) == {"c/12h": "L9"}
+        service.users().labels().create.assert_called_with(userId="me", body=label_body("c/12h"))
+        assert label_body("c/12h")["color"] == LABEL_COLORS["c/12h"]
+
+    def test_creates_parent_first(self):
+        service = mock_service()
+        service.users().labels().list().execute.return_value = {"labels": []}
+        service.users().labels().create().execute.side_effect = [{"id": "P"}, {"id": "L2"}]
+        assert build_label_id_cache(service, ["c/k"]) == {"c/k": "L2"}
+        bodies = [c.kwargs["body"]["name"] for c in service.users().labels().create.call_args_list if c.kwargs]
+        assert bodies[-2:] == ["c", "c/k"]
+
+
+def test_create_label_uses_existing_id_when_another_worker_created_it():
+    service = mock_service()
+    service.users().labels().list().execute.side_effect = [
+        {"labels": []},                                # first look: missing
+        {"labels": [{"name": "c/k", "id": "L_race"}]},  # after the 409
+    ]
+    service.users().labels().create().execute.side_effect = [{"id": "P"}, _http_error(409)]
+    assert build_label_id_cache(service, ["c/k"]) == {"c/k": "L_race"}
+
+
+def test_ensure_label_exists_renames_legacy_sent_scanned():
+    service = mock_service()
+    service.users().labels().list().execute.return_value = {
+        "labels": [{"name": "c", "id": "P"}, {"name": "claven/sent-scanned", "id": "Label_5"}]
+    }
+    assert ensure_label_exists(service, "c/s") == "Label_5"
+    service.users().labels().patch.assert_called_once_with(userId="me", id="Label_5", body=label_body("c/s"))

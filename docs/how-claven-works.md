@@ -1,6 +1,6 @@
 # How Claven Works
 
-Claven automatically labels your Gmail inbox messages as **known-sender** or **unknown-sender** based on your Sent mail history. If you've ever emailed someone, they're a known sender. Everyone else is unknown.
+Claven automatically labels your Gmail inbox messages as known (`c/k`) or unknown (`c/u`) based on your Sent mail history. If you've ever emailed someone, they're a known sender. Everyone else is unknown.
 
 This lets you focus on mail from people you know and deal with the rest on your own schedule.
 
@@ -38,21 +38,21 @@ Three scans run in sequence:
 
 ### 1. Sent scan
 
-Reads your entire Sent mail to build a list of everyone you've ever emailed. This is your known senders list. Each processed sent message is marked with a `claven/sent-scanned` label so it's not reprocessed on future runs.
+Reads your entire Sent mail to build a list of everyone you've ever emailed. This is your known senders list. Each processed sent message is marked with a hidden `c/s` label so it's not reprocessed on future runs.
 
 The sent scan always completes before any labeling begins. This ensures the known senders list is complete before any decisions are made.
 
 ### 2. Relabel scan
 
-Checks for messages that were previously labeled `unknown-sender` but whose sender is now known (e.g., you replied to them since the last scan). For each newly discovered known sender, finds their `unknown-sender` messages and atomically swaps the label to `known-sender`.
+Checks for messages that were previously labeled `c/u` but whose sender is now known (e.g., you replied to them since the last scan). For each newly discovered known sender, finds their `c/u` messages and atomically swaps the label to `c/k`.
 
 This fixes mislabeled messages without requiring a full rescan. Each sender is processed individually — if the scan is interrupted, remaining senders are picked up on the next run.
 
 ### 3. Label scan (inbox scan)
 
 Goes through every unlabeled message and applies a label:
-- `known-sender` if the sender is in your known senders list
-- `unknown-sender` if the sender is not
+- `c/k` if the sender is in your known senders list
+- `c/u` if the sender is not
 
 The scope can be set to **Inbox** (default — only labels inbox messages) or **All mail** (labels every message in your account). The label scan only processes messages that don't already have either label.
 
@@ -72,38 +72,51 @@ The inbox mode decides what happens to unknown-sender mail after it is labeled:
 
 Sunset gives you a chance to skim every message in your normal inbox, by sender, subject and preview, without visiting a separate label. Whatever you ignore is filed away for you.
 
-While a message waits, it carries a countdown label showing how much time it has left, such as `sunset/4h left`. The label shows the time left rounded down to a step (3d, 24h, 12h, 4h, 1h, then `under 1h`), so `4h left` means at least four hours remain. Countdown labels are updated every 15 minutes, and a new message gets its first one within 15 minutes of arriving. Reading or starring the message removes its countdown label. If you leave Sunset mode, Claven deletes the countdown labels. Claven checks for expired mail every 15 minutes, so an expired message can stay up to 15 minutes past its timer. When you switch to Sunset, mail already in your inbox gets a full timer from the moment you switch.
+While a message waits, it carries a countdown label showing how much time it has left, such as `c/4h`. The label shows the time left rounded down to a step (`c/3d`, `c/24h`, `c/12h`, `c/4h`, `c/1h`, then `c/0h`), so `c/4h` means at least four hours remain. The colour runs from calm to urgent: blue, yellow, orange, red. Countdown labels are updated every 15 minutes, and a new message gets its first one within 15 minutes of arriving. Reading or starring the message removes its countdown label. If you leave Sunset mode, Claven deletes the countdown labels. Claven checks for expired mail every 15 minutes, so an expired message can stay up to 15 minutes past its timer. When you switch to Sunset, mail already in your inbox gets a full timer from the moment you switch.
 
-Archived mail is never deleted. It stays in All Mail with its `unknown-sender` label.
+Archived mail is never deleted. It stays in All Mail with its `c/u` label.
 
 ## Labels are on messages, not threads
 
 Gmail labels are applied to **individual messages**, not threads. A single thread (email conversation) can contain messages with different labels. For example:
 
-- A message from someone you haven't emailed yet arrives and gets labeled `unknown-sender`
+- A message from someone you haven't emailed yet arrives and gets labeled `c/u`
 - You reply to them — they're now a known sender
-- Their next message in the same thread gets labeled `known-sender`
+- Their next message in the same thread gets labeled `c/k`
 
 The thread now has both labels. This is expected behavior. Gmail shows a thread in your inbox as long as any message in it has the INBOX label.
 
 ## Gmail labels managed by Claven
 
-Claven creates and manages three Gmail labels, plus the countdown labels in Sunset mode. These are visible in your Gmail sidebar and search.
+Claven keeps its labels short and groups them under one `c` label in your Gmail sidebar:
+
+| Label | Meaning | Colour |
+|---|---|---|
+| `c/k` | Known sender | Green |
+| `c/u` | Unknown sender | Grey |
+| `c/3d`, `c/24h` | Sunset: at least 3 days / 24 hours left | Light blue |
+| `c/12h` | Sunset: at least 12 hours left | Yellow |
+| `c/4h` | Sunset: at least 4 hours left | Orange |
+| `c/1h` | Sunset: at least 1 hour left | Red |
+| `c/0h` | Sunset: under an hour left | Dark red |
+| `c/s` | Sent message already scanned (hidden) | — |
+
+Earlier versions used longer names (`c/k`, `c/u`, `c/s`, `sunset/4h left`, …). Claven renames those in place the next time it runs, so every message keeps its label. If you change a label's colour in Gmail, Claven leaves your choice alone.
 
 ### Labels added
 
 | Label | Added by | When | To which messages |
 |---|---|---|---|
-| `claven/sent-scanned` | Sent scan | After extracting recipients from a sent message | Sent messages, after their recipients are saved to the database |
-| `known-sender` | Label scan | When an unlabeled message's sender is in the known senders list | Unlabeled inbox messages (or all mail, depending on scope) |
-| `unknown-sender` | Label scan | When an unlabeled message's sender is NOT in the known senders list | Unlabeled inbox messages (or all mail, depending on scope) |
-| `sunset/… left` | Sunset sweep | Every 15 minutes, in Sunset mode | Unread, unstarred `unknown-sender` messages in the inbox. One countdown label per message, moved to the next step as time runs down |
+| `c/s` | Sent scan | After extracting recipients from a sent message | Sent messages, after their recipients are saved to the database |
+| `c/k` | Label scan | When an unlabeled message's sender is in the known senders list | Unlabeled inbox messages (or all mail, depending on scope) |
+| `c/u` | Label scan | When an unlabeled message's sender is NOT in the known senders list | Unlabeled inbox messages (or all mail, depending on scope) |
+| `c/3d` … `c/0h` | Sunset sweep | Every 15 minutes, in Sunset mode | Unread, unstarred `c/u` messages in the inbox. One countdown label per message, moved to the next step as time runs down |
 
 ### Labels swapped
 
 | From | To | By | When |
 |---|---|---|---|
-| `unknown-sender` | `known-sender` | Relabel scan | When a sender was previously unknown but is now in the known senders list (e.g., you replied to them). Both labels are swapped atomically in a single API call — there is no moment where the message has neither label. |
+| `c/u` | `c/k` | Relabel scan | When a sender was previously unknown but is now in the known senders list (e.g., you replied to them). Both labels are swapped atomically in a single API call — there is no moment where the message has neither label. |
 
 ### Labels removed
 
@@ -111,8 +124,8 @@ Claven creates and manages three Gmail labels, plus the countdown labels in Suns
 |---|---|---|
 | `INBOX` | Gatekeeper mode | When an unknown-sender message is labeled. |
 | `INBOX` | Sunset mode | When an unknown-sender message is still unread and unstarred after the Sunset timer. |
-| `sunset/… left` | Sunset sweep | When the message is read, starred, or archived. All countdown labels are deleted when you leave Sunset mode. |
-| `INBOX` | Archive action | When the user clicks "Archive unknown-sender" on the dashboard. Removes the INBOX label from individual messages with the `unknown-sender` label, moving them out of the inbox. The `unknown-sender` label itself stays on the message. |
+| `c/3d` … `c/0h` | Sunset sweep | When the message is read, starred, or archived. All countdown labels are deleted when you leave Sunset mode. |
+| `INBOX` | Archive action | When the user clicks "Archive unknown-sender" on the dashboard. Removes the INBOX label from individual messages with the `c/u` label, moving them out of the inbox. The `c/u` label itself stays on the message. |
 
 ### Labels Claven never modifies
 
@@ -128,7 +141,7 @@ Your known senders list is built from the **To**, **Cc**, and **Bcc** fields of 
 
 The list updates incrementally:
 - When you send a new email, the recipients are added to your known senders list
-- The sent scan marks processed messages with a `claven/sent-scanned` label so it doesn't reprocess them
+- The sent scan marks processed messages with a `c/s` label so it doesn't reprocess them
 
 ## Top known senders and domains
 
@@ -152,9 +165,9 @@ This is based on **all messages ever labeled**, including messages that have sin
 
 ## Archive unknown-sender action
 
-The "Archive unknown-sender" action removes the INBOX label from all messages that have the `unknown-sender` label. This moves them out of your inbox without deleting them — they're still in All Mail.
+The "Archive unknown-sender" action removes the INBOX label from all messages that have the `c/u` label. This moves them out of your inbox without deleting them — they're still in All Mail.
 
-Because labels are per-message (not per-thread), archiving only affects the specific messages labeled `unknown-sender`. If a thread contains both known and unknown messages, only the unknown ones are archived. The thread stays in your inbox because the known messages still have the INBOX label.
+Because labels are per-message (not per-thread), archiving only affects the specific messages labeled `c/u`. If a thread contains both known and unknown messages, only the unknown ones are archived. The thread stays in your inbox because the known messages still have the INBOX label.
 
 The action shows progress as it works through your messages and can be cancelled at any time. Partial progress is kept — cancelled messages stay archived, remaining messages stay in your inbox.
 
@@ -177,11 +190,11 @@ The action shows progress as it works through your messages and can be cancelled
 
 Labels are applied once and not automatically reconsidered. There are cases where a message could have the wrong label:
 
-- **You email someone after their message was labeled**: Their inbox message was labeled `unknown-sender` before you replied. After you reply, they become a known sender, but the existing label isn't updated. A future relabel (removing all labels and rescanning) will fix this.
+- **You email someone after their message was labeled**: Their inbox message was labeled `c/u` before you replied. After you reply, they become a known sender, but the existing label isn't updated. A future relabel (removing all labels and rescanning) will fix this.
 
 - **Multiple workers scanning simultaneously**: This was a bug that has been fixed. The sent scan now always completes before the inbox scan starts, ensuring the known senders list is complete.
 
-If you suspect labels are wrong, you can remove all `known-sender` and `unknown-sender` labels and let the system rescan. The known senders list (from Sent mail) is preserved — only the inbox labels are reapplied.
+If you suspect labels are wrong, you can remove all `c/k` and `c/u` labels and let the system rescan. The known senders list (from Sent mail) is preserved — only the inbox labels are reapplied.
 
 ## Best practices
 

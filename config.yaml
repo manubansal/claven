@@ -1,10 +1,10 @@
 polling_interval_seconds: 60
 
 labels:
-  - id: known-sender
+  - id: c/k
     name: "Known Sender"
     description: "Someone you've emailed before"
-    unknown_label: "unknown-sender"
+    unknown_label: "c/u"
     rules:
       - field: "from"
         known_sender: true

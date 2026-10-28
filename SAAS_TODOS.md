@@ -663,11 +663,12 @@ Replaced the planned `auto_archive_unknown` boolean with a three-way per-user mo
 - [x] `scan_state.inbox_mode` (`label_only` | `gatekeeper` | `sunset`), `sunset_hours`, `inbox_mode_changed_at` (migration 0013); existing `auto_archive_unknown` values mapped to `gatekeeper` / `label_only`
 - [x] Gatekeeper: label scan and live labeling archive unknown-sender mail as they label it (the old auto-archive)
 - [x] Sunset: unknown-sender mail stays in the inbox; `/internal/sunset` (Cloud Scheduler, every 15 min) archives it once it is older than the timer (4h/12h/24h/3d) and still unread and unstarred. Stateless Gmail search, no per-message state. Mail already in the inbox when the user switches gets a full timer from the switch.
-- [x] Sunset countdown labels (`sunset/3d left` … `sunset/under 1h left`) on waiting mail, rounded down to a step; removed when read, starred, or archived; all deleted when the user leaves Sunset (`sunset_countdown_active`, migration 0014)
+- [x] Sunset countdown labels (`c/3d` … `c/0h`) on waiting mail, rounded down to a step; removed when read, starred, or archived; all deleted when the user leaves Sunset (`sunset_countdown_active`, migration 0014)
 - [x] `POST /api/settings/inbox-mode`; `/api/me` returns `inbox_mode`, `sunset_hours`; dashboard "Inbox mode" section with the timer dropdown
 - [ ] Drop `scan_state.auto_archive_unknown` and the legacy `/api/settings/auto-archive` endpoint once rollback to pre-#113 is no longer needed
 - [ ] Give new mail its first countdown label during live labeling instead of waiting up to 15 min for the next sweep
-- [ ] Optional: color the countdown labels (e.g. warmer as time runs out)
+- [x] Short label codes under `c/` (`c/k`, `c/u`, `c/3d` … `c/0h`, hidden `c/s`) with traffic-light colours; old names renamed in place on the next label lookup (`claven/core/labels.py`, `migrate_legacy_labels`)
+- [ ] Once every user has been migrated, drop `LEGACY_NAMES` and the rename path
 
 ### Demote sender endpoint
 - [ ] `POST /api/actions/demote-sender` — remove a sender from the known senders list (delete from `sent_recipients`)

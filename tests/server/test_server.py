@@ -851,8 +851,12 @@ class TestApiMe:
         labeled_unknown_total=0,
         unlabeled_ids=None,
         newest_mail_internal_date=None,
+        label_names=("c", "c/k", "c/u"),
     ):
         """Return a mock Gmail service with label counts.
+
+        label_names: the parent, known and unknown label names in the mailbox
+            (pass old names like "known-sender" to exercise the rename).
 
         unlabeled_ids: list of message ID strings for the unlabeled query.
             Paginated in chunks of 500. Defaults to [] (no unlabeled).
@@ -885,8 +889,9 @@ class TestApiMe:
         # labels.list → label ID map
         svc.users.return_value.labels.return_value.list.return_value.execute.return_value = {
             "labels": [
-                {"name": "known-sender", "id": known_id},
-                {"name": "unknown-sender", "id": unknown_id},
+                {"name": label_names[0], "id": "Label_parent"},
+                {"name": label_names[1], "id": known_id},
+                {"name": label_names[2], "id": unknown_id},
             ]
         }
 
@@ -1075,6 +1080,36 @@ class TestApiMe:
                     client.cookies.set("session", token)
                     response = client.get("/api/me")
         assert response.json()["allmail_labeled_known_count"] == 60
+
+    def _get_me(self, gmail_service):
+        token = _make_session_token()
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.server.db") as mock_db, \
+                 patch("claven.server.auth") as mock_auth:
+                _fake_db_ctx(mock_db)
+                mock_db.get_user_by_id.return_value = {"id": "uid-1", "email": "user@example.com"}
+                mock_db.get_history_id.return_value = 12345
+                mock_db.count_known_senders.return_value = 0
+                mock_auth.get_service.return_value = gmail_service
+                with TestClient(app) as client:
+                    client.cookies.set("session", token)
+                    return client.get("/api/me")
+
+    def test_renames_old_label_names_and_keeps_counts(self):
+        from claven.core.labels import label_body
+        svc = self._make_gmail_service(messages_total=100, labeled_known_total=60,
+                                       label_names=("claven", "known-sender", "unknown-sender"))
+        response = self._get_me(svc)
+        assert response.json()["allmail_labeled_known_count"] == 60
+        patch_calls = svc.users.return_value.labels.return_value.patch.call_args_list
+        assert ({"userId": "me", "id": self._KNOWN_LABEL_ID, "body": label_body("c/k")}
+                in [c.kwargs for c in patch_calls])
+
+    def test_current_label_names_are_not_patched(self):
+        svc = self._make_gmail_service(messages_total=100, labeled_known_total=60)
+        response = self._get_me(svc)
+        assert response.json()["allmail_labeled_known_count"] == 60
+        svc.users.return_value.labels.return_value.patch.assert_not_called()
 
     def test_returns_labeled_unknown_count(self):
         token = _make_session_token()
@@ -2242,7 +2277,7 @@ class TestInternalSunset:
             with patch("claven.server.db") as mock_db, \
                  patch("claven.server.auth") as mock_auth, \
                  patch("claven.routes.internal.archive_expired_unknown", return_value=2) as mock_archive, \
-                 patch("claven.routes.internal.build_label_id_cache", return_value={}), \
+                 patch("claven.routes.internal.build_label_id_cache", side_effect=lambda svc, names: {n: f"id-{n}" for n in names}), \
                  patch("claven.routes.internal.update_countdowns") as mock_countdowns:
                 _fake_db_ctx(mock_db)
                 mock_db.get_countdown_cleanup_users.return_value = []
@@ -2256,10 +2291,35 @@ class TestInternalSunset:
         assert response.status_code == 200
         assert response.json()["archived"] == 2
         mock_archive.assert_called_once()
-        assert mock_archive.call_args.args[1] == "unknown-sender"
+        assert mock_archive.call_args.args[1] == "c/u"
         mock_db.log_event.assert_called_once()
         mock_countdowns.assert_called_once()
         mock_db.set_sunset_countdown_active.assert_called_once_with(ANY, "uid-1", True)
+
+    def test_renames_old_labels_before_archiving(self):
+        # build_label_id_cache renames unknown-sender to c/u, so it must run
+        # before the archive search for label:c/u.
+        from datetime import datetime, timedelta, timezone
+        order = MagicMock()
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.server.db") as mock_db, \
+                 patch("claven.server.auth"), \
+                 patch("claven.routes.internal.archive_expired_unknown", return_value=0) as mock_archive, \
+                 patch("claven.routes.internal.build_label_id_cache", side_effect=lambda svc, names: {n: f"id-{n}" for n in names}) as mock_cache, \
+                 patch("claven.routes.internal.update_countdowns"):
+                order.attach_mock(mock_cache, "cache")
+                order.attach_mock(mock_archive, "archive")
+                _fake_db_ctx(mock_db)
+                mock_db.get_countdown_cleanup_users.return_value = []
+                mock_db.get_sunset_users.return_value = [
+                    {"user_id": "uid-1", "sunset_hours": 24,
+                     "changed_at": datetime.now(timezone.utc) - timedelta(days=3)},
+                ]
+                mock_db.get_history_id.return_value = 99
+                with TestClient(app) as client:
+                    client.post("/internal/sunset", headers=self._AUTH)
+        assert [c[0] for c in order.mock_calls] == ["cache", "archive"]
+        assert "c/u" in order.mock_calls[0].args[1]
 
     def test_skips_user_whose_timer_has_not_run_since_switching(self):
         from datetime import datetime, timezone
@@ -2267,7 +2327,7 @@ class TestInternalSunset:
             with patch("claven.server.db") as mock_db, \
                  patch("claven.server.auth"), \
                  patch("claven.routes.internal.archive_expired_unknown") as mock_archive, \
-                 patch("claven.routes.internal.build_label_id_cache", return_value={}), \
+                 patch("claven.routes.internal.build_label_id_cache", side_effect=lambda svc, names: {n: f"id-{n}" for n in names}), \
                  patch("claven.routes.internal.update_countdowns") as mock_countdowns:
                 _fake_db_ctx(mock_db)
                 mock_db.get_countdown_cleanup_users.return_value = []

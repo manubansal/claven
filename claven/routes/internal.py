@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 import claven.server as _srv
 from claven.core.gmail import build_label_id_cache
+from claven.core.labels import UNKNOWN
 from claven.core.sunset import (
     COUNTDOWN_LABELS,
     archive_expired_unknown,
@@ -155,14 +156,14 @@ def internal_sunset(request: Request):
 
     For users in Sunset mode, unread, unstarred unknown-sender inbox mail older
     than the user's timer is archived, and every message still waiting gets a
-    countdown label (sunset/4h left, ...). For users who left Sunset, the
+    countdown label (c/4h, ...). For users who left Sunset, the
     countdown labels are deleted. Idempotent. Intended to be triggered every
     15 minutes by Cloud Scheduler.
     """
     _require_internal_auth(request)
     now = datetime.now(timezone.utc)
     label_configs = _srv.load_config().get("labels", [])
-    unknown_label = label_configs[0].get("unknown_label", "unknown-sender") if label_configs else "unknown-sender"
+    unknown_label = label_configs[0].get("unknown_label", UNKNOWN) if label_configs else UNKNOWN
     archived_total = 0
     results = []
 
@@ -190,6 +191,8 @@ def internal_sunset(request: Request):
                     logger.debug("sunset: skipping %s (not connected)", user_id)
                     continue
                 service = _srv.auth.get_service(conn, user_id, os.environ["TOKEN_ENCRYPTION_KEY"])
+                # Builds (and renames old) labels before any search by label name.
+                label_ids = build_label_id_cache(service, [unknown_label, *COUNTDOWN_LABELS])
                 archived = 0
                 if cutoff is None:
                     logger.debug("sunset: %s timer not yet run since switching, nothing to archive", user_id)
@@ -201,8 +204,8 @@ def internal_sunset(request: Request):
                                       f"Sunset archived {archived} unread unknown-sender message{'s' if archived != 1 else ''}")
                 else:
                     logger.debug("sunset: %s nothing archived", user_id)
-                label_ids = build_label_id_cache(service, list(COUNTDOWN_LABELS))
-                update_countdowns(service, unknown_label, now, user["sunset_hours"], user["changed_at"], label_ids)
+                countdown_ids = {name: label_ids[name] for name in COUNTDOWN_LABELS}
+                update_countdowns(service, unknown_label, now, user["sunset_hours"], user["changed_at"], countdown_ids)
                 _srv.db.set_sunset_countdown_active(conn, user_id, True)
                 archived_total += archived
                 results.append({"user_id": user_id, "status": "ok", "archived": archived})
