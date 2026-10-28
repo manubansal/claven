@@ -205,7 +205,8 @@ def internal_sunset(request: Request):
                 if cutoff is None:
                     logger.debug("sunset: %s timer not yet run since switching, nothing to archive", user_id)
                 else:
-                    archived = archive_expired_unknown(service, unknown_label, cutoff, list(countdown_ids))
+                    archived = archive_expired_unknown(service, unknown_label, label_ids[unknown_label], cutoff,
+                                                       countdown_ids)
                 if archived:
                     logger.debug("sunset: %s archived %d", user_id, archived)
                     _srv.db.log_event(conn, user_id, "sunset_archived",

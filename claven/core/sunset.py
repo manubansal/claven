@@ -223,12 +223,20 @@ def clear_countdowns(service, unknown_label_id: str) -> int:
     return deleted
 
 
-def archive_expired_unknown(service, unknown_label: str, cutoff: datetime, countdown_labels) -> int:
+def archive_expired_unknown(service, unknown_label: str, unknown_label_id: str, cutoff: datetime,
+                            countdown_ids: dict[str, str]) -> int:
     """Archive (remove INBOX from) expired unknown-sender mail. Returns the count archived.
 
-    countdown_labels: the countdown labels in the mailbox (waiting mail carries one instead of c/u).
+    countdown_ids: {name: id} for the countdown labels in the mailbox (waiting
+    mail carries one instead of the unknown label). A search can match a whole
+    thread, so each message is checked before archiving: it must itself carry
+    the unknown or a countdown label, be unread and unstarred in the inbox, and
+    have arrived before the cutoff. A known sender's message is never archived.
     """
-    query = sunset_query(unknown_label, cutoff, countdown_labels)
+    names = [name for name in COUNTDOWN_LABELS if name in countdown_ids]
+    marker_ids = set(countdown_ids.values()) | {unknown_label_id}
+    cutoff_ms = int(cutoff.timestamp() * 1000)
+    query = sunset_query(unknown_label, cutoff, names)
     message_ids = []
     page_token = None
     while True:
@@ -243,12 +251,23 @@ def archive_expired_unknown(service, unknown_label: str, cutoff: datetime, count
             break
         logger.debug("archive_expired_unknown: fetching next page")
 
-    if not message_ids:
+    expired = []
+    for i in range(0, len(message_ids), _BATCH_LIMIT):
+        metadata = batch_get_message_metadata(service, message_ids[i:i + _BATCH_LIMIT], ["From"])
+        for message_id, (_headers, labels, internal_date_ms) in metadata.items():
+            if set(labels) & marker_ids and _is_waiting(labels) and internal_date_ms is not None \
+                    and internal_date_ms < cutoff_ms:
+                expired.append(message_id)
+            else:
+                logger.debug("archive_expired_unknown: %s matched by its thread only, keeping", message_id)
+
+    if not expired:
         logger.debug("archive_expired_unknown: nothing expired")
         return 0
 
     archived = 0
-    for i in range(0, len(message_ids), _BATCH_LIMIT):
-        archived += batch_remove_labels(service, message_ids[i:i + _BATCH_LIMIT], ["INBOX"])
-    logger.info("Sunset archived %d of %d expired unknown-sender messages", archived, len(message_ids))
+    for i in range(0, len(expired), _BATCH_LIMIT):
+        archived += batch_remove_labels(service, expired[i:i + _BATCH_LIMIT], ["INBOX"])
+    logger.info("Sunset archived %d of %d expired unknown-sender messages (%d matched by the search)",
+                archived, len(expired), len(message_ids))
     return archived
