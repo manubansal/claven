@@ -710,6 +710,13 @@ describe("Inbox mode", () => {
     expect(screen.getByRole("button", { name: "Label only" })).toHaveAttribute("aria-pressed", "false");
   });
 
+  it("shows the modes in their own section with a description of the current mode", async () => {
+    mockFetch({ ok: true, body: { ...DEFAULT_ME, inbox_mode: "sunset", sunset_hours: 24 } }, FILTER_CONFIG);
+    render(<DashboardPage />);
+    await screen.findByText("Inbox mode");
+    expect(screen.getByText(/archived after the timer unless read or starred/i)).toBeInTheDocument();
+  });
+
   it("hides the timer unless Sunset is selected", async () => {
     mockFetch({ ok: true, body: { ...DEFAULT_ME, inbox_mode: "gatekeeper", sunset_hours: 24 } }, FILTER_CONFIG);
     render(<DashboardPage />);
