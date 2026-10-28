@@ -658,11 +658,19 @@ describe("Dashboard page", () => {
   });
 
   describe("SSE live progress", () => {
+    // The EventSource opens in an effect after the data renders, so the page
+    // text can appear before it exists; wait for the connection itself.
+    const waitForEventSource = () =>
+      waitFor(() => {
+        expect(lastEventSource).not.toBeNull();
+        return lastEventSource!;
+      });
+
     it("connects EventSource with credentials after data loads", async () => {
       mockFetch({ ok: true, body: DEFAULT_ME });
       render(<DashboardPage />);
       await screen.findByText("user@example.com");
-      expect(lastEventSource).not.toBeNull();
+      await waitForEventSource();
       expect(lastEventSource!.url).toContain("/api/events");
       expect(lastEventSource!.withCredentials).toBe(true);
     });
@@ -671,7 +679,7 @@ describe("Dashboard page", () => {
       mockFetch({ ok: true, body: DEFAULT_ME });
       const { unmount } = render(<DashboardPage />);
       await screen.findByText("user@example.com");
-      const es = lastEventSource!;
+      const es = await waitForEventSource();
       unmount();
       expect(es.close).toHaveBeenCalled();
     });
@@ -680,8 +688,9 @@ describe("Dashboard page", () => {
       mockFetch({ ok: true, body: DEFAULT_ME });
       render(<DashboardPage />);
       await screen.findByText("user@example.com");
+      const es = await waitForEventSource();
       // Simulate SSE error — should not throw
-      lastEventSource!.onerror?.();
+      es.onerror?.();
       expect(screen.getByText(/dashboard/i)).toBeInTheDocument();
     });
   });
