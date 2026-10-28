@@ -3,6 +3,8 @@
 Run with: PYTEST_DATABASE_URL=postgresql://... pytest -m integration
 """
 
+from datetime import datetime, timezone
+
 import pytest
 
 import claven.core.db as db
@@ -273,3 +275,65 @@ class TestSentRecipients:
     def test_get_known_senders_empty(self, db_conn):
         user_id = db.upsert_user(db_conn, "nosenders@example.com")
         assert db.get_known_senders(db_conn, user_id) == set()
+
+
+class TestInboxMode:
+    def test_new_connection_defaults_to_gatekeeper_24h(self, db_conn):
+        user_id = db.upsert_user(db_conn, "mode-default@example.com")
+        db.set_history_id(db_conn, user_id, 1)
+        mode = db.get_inbox_mode(db_conn, user_id)
+        assert mode["mode"] == "gatekeeper"
+        assert mode["sunset_hours"] == 24
+
+    def test_no_scan_state_returns_label_only(self, db_conn):
+        user_id = db.upsert_user(db_conn, "mode-norow@example.com")
+        assert db.get_inbox_mode(db_conn, user_id)["mode"] == "label_only"
+
+    def test_set_sunset_with_hours(self, db_conn):
+        user_id = db.upsert_user(db_conn, "mode-sunset@example.com")
+        db.set_history_id(db_conn, user_id, 1)
+        db.set_inbox_mode(db_conn, user_id, "sunset", sunset_hours=12)
+        mode = db.get_inbox_mode(db_conn, user_id)
+        assert mode["mode"] == "sunset"
+        assert mode["sunset_hours"] == 12
+        assert mode["changed_at"] is not None
+
+    def test_changed_at_only_moves_when_mode_changes(self, db_conn):
+        user_id = db.upsert_user(db_conn, "mode-changed@example.com")
+        db.set_history_id(db_conn, user_id, 1)
+        db.set_inbox_mode(db_conn, user_id, "sunset")
+        with db_conn.cursor() as cur:
+            cur.execute("UPDATE scan_state SET inbox_mode_changed_at = '2026-01-01T00:00:00Z' WHERE user_id = %s", (user_id,))
+        pinned = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        db.set_inbox_mode(db_conn, user_id, "sunset", sunset_hours=4)  # same mode, new timer
+        assert db.get_inbox_mode(db_conn, user_id)["changed_at"] == pinned
+        db.set_inbox_mode(db_conn, user_id, "gatekeeper")
+        assert db.get_inbox_mode(db_conn, user_id)["changed_at"] > pinned
+
+    def test_auto_archive_unknown_is_derived_from_mode(self, db_conn):
+        user_id = db.upsert_user(db_conn, "mode-derived@example.com")
+        db.set_history_id(db_conn, user_id, 1)
+        db.set_inbox_mode(db_conn, user_id, "sunset")
+        assert db.get_auto_archive_unknown(db_conn, user_id) is False
+        db.set_inbox_mode(db_conn, user_id, "gatekeeper")
+        assert db.get_auto_archive_unknown(db_conn, user_id) is True
+
+    def test_set_auto_archive_maps_to_modes(self, db_conn):
+        user_id = db.upsert_user(db_conn, "mode-legacy@example.com")
+        db.set_history_id(db_conn, user_id, 1)
+        db.set_auto_archive_unknown(db_conn, user_id, False)
+        assert db.get_inbox_mode(db_conn, user_id)["mode"] == "label_only"
+        db.set_auto_archive_unknown(db_conn, user_id, True)
+        assert db.get_inbox_mode(db_conn, user_id)["mode"] == "gatekeeper"
+
+    def test_get_sunset_users(self, db_conn):
+        sunset_id = db.upsert_user(db_conn, "mode-list-sunset@example.com")
+        db.set_history_id(db_conn, sunset_id, 1)
+        db.set_inbox_mode(db_conn, sunset_id, "sunset", sunset_hours=72)
+        gate_id = db.upsert_user(db_conn, "mode-list-gate@example.com")
+        db.set_history_id(db_conn, gate_id, 1)
+        users = {u["user_id"]: u for u in db.get_sunset_users(db_conn)}
+        assert sunset_id in users
+        assert gate_id not in users
+        assert users[sunset_id]["sunset_hours"] == 72
+        assert users[sunset_id]["changed_at"] is not None

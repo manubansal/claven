@@ -17,7 +17,7 @@ Claven's use and transfer of information received from Google APIs to any other 
 When you sign in with Google, Claven asks for:
 
 - **openid** and **userinfo.email** — to identify your account by its email address.
-- **gmail.modify** — to read the sender and recipient headers of messages, create Claven's labels, apply and remove those labels on your messages, and (only if you enable auto-archive) move messages from unknown senders out of your inbox.
+- **gmail.modify** — to read the sender and recipient headers of messages, create Claven's labels, apply and remove those labels on your messages, and (only in Gatekeeper or Sunset mode) move messages from unknown senders out of your inbox.
 
 Claven never sends, deletes, or drafts email on your behalf.
 
@@ -34,7 +34,7 @@ Claven uses Google user data only to provide the labeling feature you see in the
 
 - It scans your Sent mail to build a list of addresses you have written to ("known senders").
 - When new mail arrives, it compares the sender against your known senders and your label rules, then applies the matching label.
-- If you turn on auto-archive, it removes unknown-sender messages from your inbox (they stay in All Mail with their label).
+- In **Gatekeeper** mode, it removes unknown-sender messages from your inbox as soon as they are labeled. In **Sunset** mode, unknown-sender messages stay in your inbox for the timer you choose; if one is still unread and unstarred when the timer runs out, Claven removes it from your inbox. To decide, Claven checks the message's existing read and starred state. In both modes the messages stay in All Mail with their label. In **Label only** mode, nothing is moved.
 
 Claven does not create aggregated or anonymized datasets from Google user data. The data it derives (your known-senders list and the counts shown on your dashboard) is per-user, shown only to you, and never combined across users or shared.
 
@@ -52,7 +52,7 @@ Claven does **not**:
 - your Google OAuth access and refresh tokens, **encrypted at rest**;
 - the email addresses of people you have sent mail to (your known-senders list);
 - processing state: the Gmail history position Claven has processed up to, scan progress counters, and timestamps;
-- your settings (scan scope, auto-archive);
+- your settings (scan scope, inbox mode, Sunset timer);
 - a short activity log shown on your dashboard (the most recent 100 entries).
 
 Claven does not store message bodies, attachments, or subject lines. Message IDs may appear in operational server logs, which are kept by our hosting provider for a limited period (normally 30 days) for debugging and security.

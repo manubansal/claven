@@ -1,6 +1,6 @@
 import { CONTACT_EMAIL, OPERATOR_NAME } from "@/lib/constants";
 
-export const LAST_UPDATED = "October 20, 2026";
+export const LAST_UPDATED = "October 27, 2026";
 
 const content = `# Terms of Service
 
@@ -10,11 +10,11 @@ These terms govern your use of Claven, a Gmail labeling service operated by ${OP
 
 ## The service
 
-Claven connects to your Gmail account with your permission and applies labels to your messages according to your rules and the people you have emailed. If you enable auto-archive, it also moves messages from unknown senders out of your inbox. How Claven handles your data is described in the [Privacy Policy](/privacy).
+Claven connects to your Gmail account with your permission and applies labels to your messages according to your rules and the people you have emailed. In Gatekeeper or Sunset mode, it also moves messages from unknown senders out of your inbox (Gatekeeper right away; Sunset after a timer, if they are still unread and unstarred). How Claven handles your data is described in the [Privacy Policy](/privacy).
 
 ## Your account
 
-You must have the right to use the Gmail account you connect. You are responsible for the rules and settings you choose, including auto-archive. You can disconnect Claven at any time from the dashboard, or revoke its access from your Google Account.
+You must have the right to use the Gmail account you connect. You are responsible for the rules and settings you choose, including the inbox mode you pick. You can disconnect Claven at any time from the dashboard, or revoke its access from your Google Account.
 
 ## Acceptable use
 

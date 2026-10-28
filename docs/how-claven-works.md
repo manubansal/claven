@@ -16,7 +16,7 @@ Email is a conversation with people, but your inbox treats it as a list of messa
 
 ### Triage by trust, not by time
 
-When you sit down with your inbox, the first question isn't "what arrived most recently?" — it's "who needs something from me?" Claven's known/unknown split answers the first-order triage question automatically. Auto-archive takes it further by keeping unknown-sender messages out of your inbox entirely, so you only see mail from people you know.
+When you sit down with your inbox, the first question isn't "what arrived most recently?" — it's "who needs something from me?" Claven's known/unknown split answers the first-order triage question automatically. Gatekeeper mode takes it further by keeping unknown-sender messages out of your inbox entirely, so you only see mail from people you know. Sunset mode is the gentler version: everything reaches your inbox, and unknown-sender mail you ignore files itself away.
 
 ### Service by sender
 
@@ -26,7 +26,7 @@ The top known senders list shows who has the most unread messages waiting for yo
 
 Every email in your inbox demands a slice of your attention — even if it's just to decide it doesn't matter. Unknown senders, marketing blasts, cold outreach, automated notifications: they all compete for the same finite resource as a message from your team or your most important client. At scale, this is a denial-of-service attack on your attention. The noise drowns out the signal, and the cost isn't spam — it's the important email you missed, the request you forgot to respond to, the relationship you let slip.
 
-No solution to this problem exists in Gmail. Spam filters catch the obvious junk, but everything else lands in one undifferentiated stream. Claven puts guards in place so you **cannot be overwhelmed**. Known-sender separation ensures that the people who matter to you are never buried under noise. Auto-archive keeps the noise out of sight entirely. You process it on your schedule, in batches, without the risk of missing something that matters.
+No solution to this problem exists in Gmail. Spam filters catch the obvious junk, but everything else lands in one undifferentiated stream. Claven puts guards in place so you **cannot be overwhelmed**. Known-sender separation ensures that the people who matter to you are never buried under noise. Gatekeeper and Sunset modes keep the noise out of sight. You process it on your schedule, in batches, without the risk of missing something that matters.
 
 ### Your sent mail is the signal
 
@@ -60,6 +60,20 @@ The scope can be set to **Inbox** (default — only labels inbox messages) or **
 
 **Live labeling** begins. New incoming mail is labeled automatically as it arrives via Gmail push notifications. If any scan fails or is interrupted, it automatically resumes on the next dashboard load.
 
+## Inbox modes
+
+The inbox mode decides what happens to unknown-sender mail after it is labeled:
+
+| Mode | What happens to unknown-sender mail |
+|---|---|
+| **Label only** | Stays in your inbox with its label. Nothing is archived. |
+| **Gatekeeper** (default) | Archived as soon as it is labeled. Your inbox only shows mail from people you know. |
+| **Sunset** | Stays in your inbox for a timer you pick (4h, 12h, 24h, or 3 days). If it is still unread and unstarred when the timer runs out, it is archived. Opening or starring it keeps it in your inbox. |
+
+Sunset gives you a chance to skim every message in your normal inbox, by sender, subject and preview, without visiting a separate label. Whatever you ignore is filed away for you. Claven checks for expired mail every 15 minutes, so an expired message can stay up to 15 minutes past its timer. When you switch to Sunset, mail already in your inbox gets a full timer from the moment you switch.
+
+Archived mail is never deleted. It stays in All Mail with its `unknown-sender` label.
+
 ## Labels are on messages, not threads
 
 Gmail labels are applied to **individual messages**, not threads. A single thread (email conversation) can contain messages with different labels. For example:
@@ -92,11 +106,13 @@ Claven creates and manages three Gmail labels. These are visible in your Gmail s
 
 | Label | Removed by | When |
 |---|---|---|
+| `INBOX` | Gatekeeper mode | When an unknown-sender message is labeled. |
+| `INBOX` | Sunset mode | When an unknown-sender message is still unread and unstarred after the Sunset timer. |
 | `INBOX` | Archive action | When the user clicks "Archive unknown-sender" on the dashboard. Removes the INBOX label from individual messages with the `unknown-sender` label, moving them out of the inbox. The `unknown-sender` label itself stays on the message. |
 
 ### Labels Claven never modifies
 
-Claven does not add, remove, or modify any Gmail labels other than the three listed above and the INBOX label (via the archive action only). It does not touch UNREAD, STARRED, IMPORTANT, SPAM, TRASH, or any user-created labels.
+Claven does not add, remove, or modify any Gmail labels other than the three listed above and the INBOX label (via Gatekeeper, Sunset, or the archive action). In Sunset mode it reads, but never changes, UNREAD and STARRED. It never changes UNREAD, STARRED, IMPORTANT, SPAM, TRASH, or any user-created labels.
 
 ## Inbox-only labeling
 
@@ -165,9 +181,11 @@ If you suspect labels are wrong, you can remove all `known-sender` and `unknown-
 
 ## Best practices
 
-### Let auto-archive do the heavy lifting
+### Pick the inbox mode that fits how you read mail
 
-Auto-archive is on by default. It moves unknown-sender messages out of your inbox as they're labeled, so your inbox only shows mail from people you know. You don't need to manually archive — just check All Mail periodically for anything you missed.
+Gatekeeper is on by default. It moves unknown-sender messages out of your inbox as they're labeled, so your inbox only shows mail from people you know. You don't need to manually archive — just check All Mail periodically for anything you missed.
+
+If you'd rather see everything once, use Sunset. Skim new mail as usual; open or star anything from an unknown sender that matters, and let the rest expire. A shorter timer keeps your inbox tighter; a longer one suits days when you check mail less often.
 
 ### Process unknown-sender mail in batches
 
