@@ -171,6 +171,30 @@ def test_batch_swap_labels_can_remove_extra_labels():
         userId="me", id="m1", body={"removeLabelIds": ["LU", "L4"], "addLabelIds": ["LK"]})
 
 
+def test_has_new_messages_checks_added_messages_on_any_label():
+    from claven.core.gmail import has_new_messages
+    service = mock_service()
+    service.users().history().list().execute.return_value = {"history": [{"id": "5"}]}
+    assert has_new_messages(service, 100) is True
+    service.users().history().list.assert_called_with(
+        userId="me", startHistoryId=100, historyTypes=["messageAdded"], maxResults=1)
+
+
+def test_has_new_messages_false_for_label_changes_only():
+    from claven.core.gmail import has_new_messages
+    service = mock_service()
+    service.users().history().list().execute.return_value = {"historyId": "120"}
+    assert has_new_messages(service, 100) is False
+
+
+def test_has_new_messages_true_when_history_expired():
+    # Let the full path handle an expired history id (it falls back to a scan).
+    from claven.core.gmail import has_new_messages
+    service = mock_service()
+    service.users().history().list().execute.side_effect = Exception("HttpError 404 notFound")
+    assert has_new_messages(service, 100) is True
+
+
 def test_apply_label_adds_several_labels_in_one_call():
     service = mock_service()
     apply_label(service, "m1", "LU", "L12")

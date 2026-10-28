@@ -32,6 +32,7 @@ _REGISTRY = [
     ("W", "warning.scan.stalled"),
     ("E", "error.scan.stalled"),
     ("E", "error.db.connection_lost"),
+    ("E", "error.db.deadlock"),
     ("E", "error.gmail.api"),
     ("E", "error.gmail.rate_limited"),
     ("E", "error.gmail.auth_expired"),

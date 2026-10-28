@@ -275,6 +275,12 @@ async def webhook_gmail(request: Request):
             # Also serves as reconciliation: if the initial scan never completed,
             # build_known_senders falls through to a full scan.
             scan_progress = _srv.db.get_sent_scan_progress(conn, user["id"])
+            # Pushes also fire for label changes (including Claven's own); skip
+            # the work unless a message was added or the sent scan needs finishing.
+            if scan_progress["status"] == "complete" and not _srv.has_new_messages(service, stored_history_id):
+                logger.debug("webhook_gmail: no new messages for %s, advancing history only", email)
+                _srv.db.set_history_id(conn, user["id"], notification_history_id)
+                return {"status": "ok", "detail": "no new messages"}
             if _srv._needs_sent_scan(scan_progress):
                 logger.debug("webhook_gmail: reconciling sent scan (status=%s)", scan_progress["status"])
                 _srv.db.set_sent_scan_status(conn, user["id"], "in_progress")

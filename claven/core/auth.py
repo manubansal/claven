@@ -68,5 +68,8 @@ def get_service(conn, user_id: str, key_hex: str):
         raise ValueError(f"No credentials found for user {user_id}")
     if creds.expired and creds.refresh_token:
         creds.refresh(Request())
-        store_credentials(conn, user_id, creds, key_hex)
+        # Commit right away, outside the caller's transaction: holding the token
+        # row while the caller goes on to lock scan_state deadlocked concurrent jobs.
+        with db.get_connection() as token_conn:
+            store_credentials(token_conn, user_id, creds, key_hex)
     return build("gmail", "v1", credentials=creds)

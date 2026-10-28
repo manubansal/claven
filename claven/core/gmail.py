@@ -89,6 +89,28 @@ def list_history(service, start_history_id, label_id="INBOX"):
     return records
 
 
+def has_new_messages(service, start_history_id) -> bool:
+    """Whether any message (inbox, sent, or other) was added since a history ID.
+
+    Label changes alone don't count. An expired history ID counts as True so the
+    caller's full path can fall back to a scan.
+    """
+    try:
+        response = gmail_retry(lambda: service.users().history().list(
+            userId="me", startHistoryId=start_history_id, historyTypes=["messageAdded"], maxResults=1,
+        ).execute())
+    except Exception as exc:
+        if "404" in str(exc):
+            logger.debug("has_new_messages: history %s expired", start_history_id)
+            return True
+        raise
+    if response.get("history"):
+        logger.debug("has_new_messages: messages added since %s", start_history_id)
+        return True
+    logger.debug("has_new_messages: nothing added since %s", start_history_id)
+    return False
+
+
 def get_message(service, message_id, format="metadata", metadata_headers=None):
     """Get a single message. Returns metadata by default."""
     kwargs = {"userId": "me", "id": message_id, "format": format}
