@@ -105,21 +105,24 @@ from claven.core.sunset import (  # noqa: E402
 
 class TestCountdownLabel:
     def test_labels_are_short_codes_under_c(self):
-        assert COUNTDOWN_LABELS == ("c/3d", "c/24h", "c/12h", "c/4h", "c/1h", "c/0h")
+        assert COUNTDOWN_LABELS == ("c/3d", "c/24h", "c/12h", "c/4h", "c/1h")
 
     @pytest.mark.parametrize("hours,label", [
         (80, "c/3d"),
-        (72, "c/3d"),
-        (71.9, "c/24h"),
-        (24, "c/24h"),
-        (13, "c/12h"),
-        (4, "c/4h"),        # "4h left" means at least 4h remain
-        (3.99, "c/1h"),
+        (72, "c/3d"),       # fresh mail on a 3-day timer shows the full timer
+        (71.9, "c/3d"),
+        (24.01, "c/3d"),
+        (24, "c/24h"),      # fresh mail on a 24h timer shows c/24h
+        (12.01, "c/24h"),
+        (12, "c/12h"),
+        (4.01, "c/12h"),
+        (4, "c/4h"),        # "c/4h" means gone within 4 hours
+        (1.01, "c/4h"),
         (1, "c/1h"),
-        (0.5, "c/0h"),
-        (-1, "c/0h"),
+        (0.5, "c/1h"),
+        (-1, "c/1h"),       # overdue until the next sweep archives it
     ])
-    def test_rounds_time_left_down_to_a_step(self, hours, label):
+    def test_rounds_time_left_up_to_a_step(self, hours, label):
         assert countdown_label(timedelta(hours=hours)) == label
 
 
@@ -145,7 +148,7 @@ def _ids_by(service, mapping):
     service.users.return_value.messages.return_value.list.side_effect = _list
 
 
-LABEL_IDS = {name: f"L{i}" for i, name in enumerate(COUNTDOWN_LABELS)}  # L0=3d … L5=under 1h
+LABEL_IDS = {name: f"L{i}" for i, name in enumerate(COUNTDOWN_LABELS)}  # L0=3d … L4=1h
 
 
 class TestUpdateCountdowns:
@@ -161,16 +164,16 @@ class TestUpdateCountdowns:
         return changed, mock_modify
 
     def test_adds_the_right_step_and_removes_the_others(self):
-        ms = int((NOW - timedelta(hours=10)).timestamp() * 1000)  # 14h left → 12h step
+        ms = int((NOW - timedelta(hours=14)).timestamp() * 1000)  # 10h left → gone within 12h
         changed, mock_modify = self._run(["m1"], {"m1": ({}, ["INBOX"], ms)})
         assert changed == 1
         call = mock_modify.call_args_list[0]
         assert call.args[1] == ["m1"]
         assert call.kwargs["add_label_ids"] == ["L2"]
-        assert set(call.kwargs["remove_label_ids"]) == {"L0", "L1", "L3", "L4", "L5"}
+        assert set(call.kwargs["remove_label_ids"]) == {"L0", "L1", "L3", "L4"}
 
     def test_leaves_messages_already_on_the_right_step(self):
-        ms = int((NOW - timedelta(hours=10)).timestamp() * 1000)
+        ms = int((NOW - timedelta(hours=14)).timestamp() * 1000)
         changed, mock_modify = self._run(["m1"], {"m1": ({}, ["INBOX", "L2"], ms)}, labeled={"L2": ["m1"]})
         assert changed == 0
         mock_modify.assert_not_called()

@@ -7,7 +7,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from claven.core.labels import LEGACY_NAMES, label_body
+from claven.core.labels import LEGACY_NAMES, RETIRED_NAMES, label_body
 
 logger = logging.getLogger(__name__)
 
@@ -97,8 +97,8 @@ def get_message(service, message_id, format="metadata", metadata_headers=None):
     return gmail_retry(lambda: service.users().messages().get(**kwargs).execute())
 
 
-def get_message_headers(service, message_id):
-    """Get From and To headers for a message.
+def get_message_metadata(service, message_id):
+    """Get From and To headers, label ids, and arrival time (internalDate, ms) for a message.
 
     Subject is deliberately not fetched: no label rule uses it (data minimization).
     """
@@ -113,7 +113,14 @@ def get_message_headers(service, message_id):
         name = header["name"].lower()
         if name in ("from", "to"):
             headers[name] = header["value"]
-    return headers, msg.get("labelIds", [])
+    internal_date = msg.get("internalDate")
+    return headers, msg.get("labelIds", []), int(internal_date) if internal_date else None
+
+
+def get_message_headers(service, message_id):
+    """Get From and To headers and label ids for a message."""
+    headers, label_ids, _ = get_message_metadata(service, message_id)
+    return headers, label_ids
 
 
 def _style_label(service, name: str, write) -> dict:
@@ -156,13 +163,18 @@ def _create_label(service, name: str, labels: list[dict]) -> str:
 
 
 def migrate_legacy_labels(service, labels: list[dict]) -> list[dict]:
-    """Rename labels from older Claven versions to their current names, in place.
+    """Rename labels from older Claven versions to their current names, in place,
+    and delete labels Claven no longer uses.
 
     Renaming keeps the label on every message, so nothing has to be relabeled.
     A label is left alone if its new name is already taken. Returns the label
     list with the renames applied.
     """
     labels = list(labels)
+    for label in [l for l in labels if l["name"] in RETIRED_NAMES]:
+        gmail_retry(lambda lid=label["id"]: service.users().labels().delete(userId="me", id=lid).execute())
+        logger.info("Deleted retired Gmail label %s (id: %s)", label["name"], label["id"])
+        labels.remove(label)
     names = {l["name"] for l in labels}
     for label in list(labels):
         new_name = LEGACY_NAMES.get(label["name"])
@@ -357,12 +369,13 @@ def _parse_addresses(header_value):
     return re.findall(r"[\w.+-]+@[\w.-]+\.\w+", header_value)
 
 
-def apply_label(service, message_id, label_id):
-    """Apply a label to a message."""
+def apply_label(service, message_id, label_id, *more_label_ids):
+    """Apply one or more labels to a message in a single call."""
+    label_ids = [label_id, *more_label_ids]
     gmail_retry(lambda: service.users().messages().modify(
-        userId="me", id=message_id, body={"addLabelIds": [label_id]}
+        userId="me", id=message_id, body={"addLabelIds": label_ids}
     ).execute())
-    logger.debug("Applied label %s to message %s", label_id, message_id)
+    logger.debug("Applied labels %s to message %s", label_ids, message_id)
 
 
 def gmail_retry(fn, max_retries=3):

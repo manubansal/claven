@@ -147,6 +147,27 @@ def test_get_message_headers_extracts_all_fields():
     assert "UNREAD" in label_ids
 
 
+def test_get_message_metadata_returns_arrival_time():
+    from claven.core.gmail import get_message_metadata
+    service = mock_service()
+    service.users().messages().get().execute.return_value = {
+        "payload": {"headers": [{"name": "From", "value": "a@example.com"}]},
+        "labelIds": ["INBOX"],
+        "internalDate": "1761645600000",
+    }
+    headers, label_ids, internal_date_ms = get_message_metadata(service, "m1")
+    assert headers == {"from": "a@example.com"}
+    assert label_ids == ["INBOX"]
+    assert internal_date_ms == 1761645600000
+
+
+def test_apply_label_adds_several_labels_in_one_call():
+    service = mock_service()
+    apply_label(service, "m1", "LU", "L12")
+    service.users().messages().modify.assert_called_with(
+        userId="me", id="m1", body={"addLabelIds": ["LU", "L12"]})
+
+
 def test_get_message_headers_never_requests_subject():
     # Data minimization: no label rule uses the subject, so it is never fetched.
     service = mock_service()
@@ -630,6 +651,20 @@ class TestMigrateLegacyLabels:
         migrate_legacy_labels(service, [{"name": "c", "id": "P"}, {"name": "known-sender", "id": "L1"}])
         last_body = patch_call.call_args.kwargs["body"]
         assert last_body["name"] == "c/k" and "color" not in last_body
+
+
+class TestRetiredLabels:
+    def test_deletes_retired_label(self):
+        service = mock_service()
+        labels = [{"name": "c", "id": "P"}, {"name": "c/0h", "id": "L0"}, {"name": "c/1h", "id": "L1"}]
+        result = migrate_legacy_labels(service, labels)
+        service.users().labels().delete.assert_called_once_with(userId="me", id="L0")
+        assert [l["name"] for l in result] == ["c", "c/1h"]
+
+    def test_no_delete_when_nothing_retired(self):
+        service = mock_service()
+        migrate_legacy_labels(service, [{"name": "c/1h", "id": "L1"}])
+        service.users().labels().delete.assert_not_called()
 
 
 class TestBuildLabelIdCache:

@@ -17,7 +17,7 @@ from claven.core.gmail import (
     batch_remove_labels,
     gmail_retry,
 )
-from claven.core.labels import LEGACY_NAMES
+from claven.core.labels import LEGACY_NAMES, RETIRED_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -28,13 +28,15 @@ INBOX_MODES = ("label_only", "gatekeeper", "sunset")
 SUNSET_HOURS_CHOICES = (4, 12, 24, 72)
 DEFAULT_SUNSET_HOURS = 24
 
-# Countdown labels on mail waiting in Sunset. A label names the largest step
-# that still fits the time left, so "c/4h" means at least 4 hours remain.
+# Countdown labels on mail waiting in Sunset. A label names the smallest step
+# the time left fits in, so "c/4h" means the mail is gone within 4 hours, and
+# fresh mail shows the full timer the user picked.
 COUNTDOWN_STEPS = ((72, "3d"), (24, "24h"), (12, "12h"), (4, "4h"), (1, "1h"))
-COUNTDOWN_UNDER = "c/0h"
-COUNTDOWN_LABELS = tuple(f"c/{name}" for _, name in COUNTDOWN_STEPS) + (COUNTDOWN_UNDER,)
-# Countdown names from before the c/ codes, still deleted when a user leaves Sunset.
-_OLD_COUNTDOWN_LABELS = tuple(old for old, new in LEGACY_NAMES.items() if new in COUNTDOWN_LABELS)
+COUNTDOWN_LABELS = tuple(f"c/{name}" for _, name in COUNTDOWN_STEPS)
+# Older countdown names, still deleted when a user leaves Sunset.
+_OLD_COUNTDOWN_LABELS = (
+    tuple(old for old, new in LEGACY_NAMES.items() if new in COUNTDOWN_LABELS) + tuple(RETIRED_NAMES)
+)
 
 
 def sunset_cutoff(now: datetime, sunset_hours: int, mode_changed_at: datetime | None) -> datetime | None:
@@ -79,12 +81,12 @@ def _list_ids(service, **query) -> list[str]:
 
 
 def countdown_label(remaining: timedelta) -> str:
-    """Countdown label for the time left, rounded down to a step."""
-    for hours, name in COUNTDOWN_STEPS:
-        if remaining >= timedelta(hours=hours):
+    """Countdown label for the time left, rounded up to a step ("gone within")."""
+    for (hours, name), (next_hours, _) in zip(COUNTDOWN_STEPS, COUNTDOWN_STEPS[1:]):
+        if remaining > timedelta(hours=next_hours):
             return f"c/{name}"
-    logger.debug("countdown_label: %s left, under the smallest step", remaining)
-    return COUNTDOWN_UNDER
+    logger.debug("countdown_label: %s left, within the last step", remaining)
+    return f"c/{COUNTDOWN_STEPS[-1][1]}"
 
 
 def message_expiry(internal_date_ms: int, sunset_hours: int, mode_changed_at: datetime | None) -> datetime:
@@ -94,6 +96,13 @@ def message_expiry(internal_date_ms: int, sunset_hours: int, mode_changed_at: da
         logger.debug("message_expiry: arrived before switching to Sunset, timer starts at the switch")
         start = mode_changed_at
     return start + timedelta(hours=sunset_hours)
+
+
+def arrival_countdown(internal_date_ms: int, sunset_hours: int, mode_changed_at: datetime | None,
+                      now: datetime | None = None) -> str:
+    """Countdown label for a message being labeled right now."""
+    now = now or datetime.now(timezone.utc)
+    return countdown_label(message_expiry(internal_date_ms, sunset_hours, mode_changed_at) - now)
 
 
 def update_countdowns(service, unknown_label: str, now: datetime, sunset_hours: int,
