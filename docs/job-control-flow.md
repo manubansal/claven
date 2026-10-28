@@ -23,6 +23,16 @@ User-initiated actions that require no scan loops running:
 
 Exclusive jobs and scan loops cannot run concurrently for the same user. An exclusive job must cancel running scans before starting.
 
+### Scheduled sweeps (outside job control)
+
+Triggered by Cloud Scheduler, not by the user, and not subject to `cancel_state`:
+
+- **Poll** (`/internal/poll`, hourly) — catch-up for missed push notifications
+- **Renew watches** (`/internal/renew-watches`, daily) — extends Gmail push watches
+- **Sunset sweep** (`/internal/sunset`, every 15 min) — for users in Sunset mode, archives unread, unstarred unknown-sender inbox mail older than the timer, then updates countdown labels; for users who left Sunset, deletes the countdown labels
+
+The Sunset sweep can overlap with scans or an Archive unknown-sender job. That is safe: removing INBOX and moving countdown labels are idempotent, and the sweep only touches unknown-sender mail.
+
 ## Cancel state machine
 
 ### State column
