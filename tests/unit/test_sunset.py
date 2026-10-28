@@ -73,33 +73,70 @@ class TestUnknownGroup:
 
 
 class TestArchiveExpiredUnknown:
-    def test_archives_all_matching_messages_across_pages(self):
+    """Only messages that are themselves expired unknown-sender mail are archived.
+
+    A Gmail search can match a whole thread, so a known sender's message in the
+    same conversation as expired unknown-sender mail can come back too.
+    """
+
+    CUTOFF = NOW - timedelta(hours=24)
+    OLD = int((NOW - timedelta(hours=30)).timestamp() * 1000)
+    FRESH = int((NOW - timedelta(hours=2)).timestamp() * 1000)
+
+    def _run(self, pages, metadata, countdown_ids=None):
         service = MagicMock()
-        service.users().messages().list().execute.side_effect = _list_pages(["a", "b"], ["c"])
-        cutoff = NOW - timedelta(hours=24)
-        with patch("claven.core.sunset.batch_remove_labels", return_value=3) as mock_remove:
-            count = archive_expired_unknown(service, "unknown-sender", cutoff, ["c/24h"])
+        service.users().messages().list().execute.side_effect = _list_pages(*pages)
+        fetch = lambda svc, ids, headers: {m: metadata[m] for m in ids if m in metadata}
+        with patch("claven.core.sunset.batch_get_message_metadata", side_effect=fetch), \
+                patch("claven.core.sunset.batch_remove_labels", side_effect=lambda s, b, l: len(b)) as mock_remove:
+            count = archive_expired_unknown(service, "unknown-sender", "LU", self.CUTOFF,
+                                            countdown_ids if countdown_ids is not None else {"c/1h": "L1"})
+        archived = [m for c in mock_remove.call_args_list for m in c.args[1]]
+        return count, archived, service
+
+    def test_archives_expired_unknown_mail_across_pages(self):
+        meta = {m: ({}, ["INBOX", "UNREAD", "LU"], self.OLD) for m in "abc"}
+        count, archived, service = self._run([["a", "b"], ["c"]], meta)
         assert count == 3
-        mock_remove.assert_called_once_with(service, ["a", "b", "c"], ["INBOX"])
+        assert archived == ["a", "b", "c"]
         list_kwargs = service.users().messages().list.call_args_list[-1].kwargs
-        assert list_kwargs["q"] == sunset_query("unknown-sender", cutoff, ["c/24h"])
+        assert list_kwargs["q"] == sunset_query("unknown-sender", self.CUTOFF, ["c/1h"])
         assert list_kwargs["pageToken"] == "t1"
 
+    def test_archives_mail_carrying_a_countdown(self):
+        count, archived, _ = self._run([["a"]], {"a": ({}, ["INBOX", "UNREAD", "L1"], self.OLD)})
+        assert archived == ["a"]
+
+    def test_never_archives_a_known_sender_thread_mate(self):
+        meta = {"u": ({}, ["INBOX", "UNREAD", "LU"], self.OLD), "k": ({}, ["INBOX", "UNREAD", "LK"], self.OLD)}
+        count, archived, _ = self._run([["u", "k"]], meta)
+        assert archived == ["u"]
+        assert count == 1
+
+    @pytest.mark.parametrize("labels", [["INBOX", "LU"], ["INBOX", "UNREAD", "STARRED", "LU"], ["UNREAD", "LU"]])
+    def test_never_archives_a_read_or_starred_thread_mate(self, labels):
+        count, archived, _ = self._run([["m"]], {"m": ({}, labels, self.OLD)})
+        assert archived == []
+
+    def test_never_archives_a_fresh_thread_mate(self):
+        count, archived, _ = self._run([["m"]], {"m": ({}, ["INBOX", "UNREAD", "LU"], self.FRESH)})
+        assert archived == []
+
     def test_nothing_to_archive(self):
-        service = MagicMock()
-        service.users().messages().list().execute.return_value = {}
-        with patch("claven.core.sunset.batch_remove_labels") as mock_remove:
-            count = archive_expired_unknown(service, "unknown-sender", NOW, [])
+        count, archived, _ = self._run([[]], {})
         assert count == 0
-        mock_remove.assert_not_called()
+        assert archived == []
 
     def test_chunks_by_batch_limit(self):
-        service = MagicMock()
         ids = [f"m{i}" for i in range(250)]
-        service.users().messages().list().execute.return_value = {"messages": [{"id": m} for m in ids]}
-        with patch("claven.core.sunset.batch_remove_labels", side_effect=lambda s, b, l: len(b)) as mock_remove, \
-                patch("claven.core.sunset._BATCH_LIMIT", 100):
-            count = archive_expired_unknown(service, "unknown-sender", NOW, [])
+        meta = {m: ({}, ["INBOX", "UNREAD", "LU"], self.OLD) for m in ids}
+        with patch("claven.core.sunset._BATCH_LIMIT", 100):
+            service = MagicMock()
+            service.users().messages().list().execute.return_value = {"messages": [{"id": m} for m in ids]}
+            fetch = lambda svc, b, headers: {m: meta[m] for m in b}
+            with patch("claven.core.sunset.batch_get_message_metadata", side_effect=fetch), \
+                    patch("claven.core.sunset.batch_remove_labels", side_effect=lambda s, b, l: len(b)) as mock_remove:
+                count = archive_expired_unknown(service, "unknown-sender", "LU", self.CUTOFF, {})
         assert count == 250
         assert [len(c.args[1]) for c in mock_remove.call_args_list] == [100, 100, 50]
 

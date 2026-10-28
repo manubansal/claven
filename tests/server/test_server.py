@@ -2383,14 +2383,14 @@ class TestInternalSunset:
         assert response.status_code == 200
         assert response.json()["archived"] == 2
         mock_archive.assert_called_once()
-        assert mock_archive.call_args.args[1] == "c/u"
+        assert mock_archive.call_args.args[1:3] == ("c/u", "id-c/u")
         mock_db.log_event.assert_called_once()
         mock_countdowns.assert_called_once()
         # Countdowns replace c/u while mail waits, so the sweep needs its id to swap back.
         assert mock_countdowns.call_args.args[1:3] == ("c/u", "id-c/u")
         # Hourly labels for the 24h timer, plus any left over from a longer timer.
         assert mock_countdowns.call_args.args[-1] == {"c/40h": "old-40", **{f"c/{h}h": f"id-c/{h}h" for h in range(24, 0, -1)}}
-        assert mock_archive.call_args.args[3] == ["c/40h", *(f"c/{h}h" for h in range(24, 0, -1))]
+        assert mock_archive.call_args.args[4] == mock_countdowns.call_args.args[-1]
         mock_db.set_sunset_countdown_active.assert_called_once_with(ANY, "uid-1", True)
 
     def test_renames_old_labels_before_archiving(self):
