@@ -13,8 +13,8 @@ Metrics returned by `/api/me` and displayed on the dashboard.
 
 | Metric | Definition | Gmail API call | Exact? | Notes |
 |---|---|---|---|---|
-| `allmail_labeled_known_count` | Messages with the known-sender label across all mail | `labels.get(known-sender-id).messagesTotal` | Yes | Single call. Not inbox-scoped, but the label is only applied to inbox messages. |
-| `allmail_labeled_unknown_count` | Messages with the unknown-sender label across all mail | `labels.get(unknown-sender-id).messagesTotal` | Yes | Same as above. |
+| `allmail_labeled_known_count` | Messages with the known-sender label (`c/k`) across all mail | `labels.get(known-sender-id).messagesTotal` | Yes | Single call. Not inbox-scoped, but the label is only applied to inbox messages. |
+| `allmail_labeled_unknown_count` | Messages with the unknown-sender label (`c/u`) across all mail | `labels.get(unknown-sender-id).messagesTotal` | Yes | Same as above. |
 | `allmail_labeled_total_count` | Sum of known + unknown | Derived from above | Yes | Always equals `known + unknown`. |
 | `inbox_unlabeled_first_page_count` | Count of first page of unlabeled inbox messages | `len(messages.list(q=unlabeled_query, maxResults=500).messages)` | Yes, 0-500 | Same query as `scan_inbox`. Used for retrigger decision (> 0 means work remains). |
 | `inbox_unlabeled_deep_count` | Total count of unlabeled inbox messages | Paginate `messages.list(q=unlabeled_query)`, count all IDs | Yes | Expensive: ~200-400ms per page of 500. For 10k messages, ~4-8 seconds. |
@@ -29,7 +29,7 @@ Metrics returned by `/api/me` and displayed on the dashboard.
 
 ### Unlabeled query
 
-The unlabeled query is `in:inbox -label:known-sender -label:unknown-sender` (built by `scan.py:_unlabeled_query()`). This is the same query `scan_inbox` uses to find work, so the dashboard count and the scan's exit condition always agree.
+The unlabeled query is `in:inbox -label:c/k -label:c/u` (built by `scan.py:_unlabeled_query()`). This is the same query `scan_inbox` uses to find work, so the dashboard count and the scan's exit condition always agree.
 
 ## Timestamp metrics
 
@@ -55,7 +55,7 @@ Gmail's `q`-based search (`messages.list(q="label:X")`) is thread-oriented. If m
 
 | Metric | Definition | Gmail API call | Exact? |
 |---|---|---|---|
-| `sent_scanned_count` | Messages with the `claven/sent-scanned` label | `labels.get(sent-scanned-id).messagesTotal` | Yes |
+| `sent_scanned_count` | Messages with the `c/s` label | `labels.get(sent-scanned-id).messagesTotal` | Yes |
 | `sent_total_count` | Total sent messages | `labels.get(SENT).messagesTotal` | Yes |
 
 ## General mailbox metrics

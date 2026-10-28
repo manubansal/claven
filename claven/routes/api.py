@@ -9,7 +9,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 import claven.server as _srv
+from claven.core.gmail import migrate_legacy_labels
 from claven.core.health import HEALTH_CODES
+from claven.core.labels import KNOWN, LEGACY_NAMES
 from claven.routes.auth import _get_session
 
 logger = logging.getLogger(__name__)
@@ -89,6 +91,11 @@ def api_me(request: Request):
             sent_total_live = b1.get("sent", {}).get("messagesTotal")
 
             all_gmail_labels = b1.get("labels", {}).get("labels", [])
+            if LEGACY_NAMES.keys() & {l["name"] for l in all_gmail_labels}:
+                logger.debug("api_me: renaming labels from an older Claven version")
+                all_gmail_labels = migrate_legacy_labels(service, all_gmail_labels)
+            else:
+                logger.debug("api_me: labels already current")
             label_id_by_name = {l["name"]: l["id"] for l in all_gmail_labels}
 
             newest_msgs = b1.get("newest_msg", {}).get("messages", [])
@@ -604,7 +611,7 @@ def api_top_senders(request: Request):
 
     # Query unread known-sender inbox messages
     label_configs = _srv.load_config().get("labels", [])
-    known_label = label_configs[0]["id"] if label_configs else "known-sender"
+    known_label = label_configs[0]["id"] if label_configs else KNOWN
 
     query = f"in:inbox is:unread label:{known_label}"
     result = gmail_retry(lambda: service.users().messages().list(

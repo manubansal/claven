@@ -625,3 +625,38 @@ class TestScanInboxShutdown:
             scan_inbox(MagicMock(), conn, "u1", _LABEL_CONFIGS, _LABEL_ID_CACHE,
                        known_senders=set(), shutdown_event=event)
         assert any(c.args == (5, event) for c in mock_sleep.call_args_list)
+
+
+# ---------------------------------------------------------------------------
+# Label names come from config / claven.core.labels, not hardcoded strings
+# ---------------------------------------------------------------------------
+
+class TestLabelNames:
+    def test_sent_scan_uses_short_hidden_marker(self):
+        from claven.core.scan import SENT_SCANNED_LABEL, build_known_senders
+        assert SENT_SCANNED_LABEL == "c/s"
+        service, conn = _make_service(), _make_conn()
+        with patch("claven.core.scan.ensure_label_exists", return_value="Label_scanned") as mock_ensure, \
+             patch("claven.core.scan.list_messages", return_value=[]) as mock_list, \
+             patch("claven.core.scan.db"), \
+             patch("claven.core.scan.time.sleep"):
+            build_known_senders(service, conn, "u1")
+        mock_ensure.assert_called_once_with(service, "c/s")
+        assert "-label:c/s" in str(mock_list.call_args)
+
+    def test_relabel_searches_configured_unknown_label(self):
+        from claven.core.scan import relabel_scan
+        configs = [{"id": "c/k", "unknown_label": "c/u", "rules": []}]
+        service = MagicMock()
+        service.users().messages().list().execute.return_value = {"messages": []}
+        with patch("claven.core.scan.db") as mock_db:
+            mock_db.get_pending_relabel_senders.return_value = ["alice@example.com"]
+            relabel_scan(service, "u1", configs, {"c/k": "LK", "c/u": "LU"})
+        assert service.users().messages().list.call_args.kwargs["q"] == "from:alice@example.com label:c/u"
+
+    def test_config_uses_short_codes(self):
+        import yaml
+        from pathlib import Path
+        config = yaml.safe_load((Path(__file__).parent.parent / "config.yaml").read_text())
+        assert config["labels"][0]["id"] == "c/k"
+        assert config["labels"][0]["unknown_label"] == "c/u"

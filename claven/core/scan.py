@@ -17,6 +17,7 @@ from claven.core.gmail import (
     save_scan_checkpoint,
     _parse_addresses,
 )
+from claven.core.labels import SENT_SCANNED
 from claven.core.process import process_message
 import time
 
@@ -102,13 +103,13 @@ def _event_message(event: str, data: dict) -> str | None:
             return None  # Skip noisy per-batch events without a clear message
 
 
-SENT_SCANNED_LABEL = "claven/sent-scanned"
+SENT_SCANNED_LABEL = SENT_SCANNED
 
 
 def build_known_senders(service, conn, user_id, should_continue=None, shutdown_event=None):
     """Build known senders list by scanning unlabeled sent messages.
 
-    Queries Gmail for sent messages without the 'claven/sent-scanned' label,
+    Queries Gmail for sent messages without the hidden 'c/s' label,
     extracts recipients, inserts into sent_recipients, and applies the label.
     Loops until no unlabeled sent messages remain.
 
@@ -219,6 +220,7 @@ def relabel_scan(service, user_id, label_configs, label_id_cache, should_continu
 
     # Resolve label IDs
     unknown_label_id = None
+    unknown_label_name = None
     known_label_id = None
     for lc in label_configs:
         if not known_label_id:
@@ -226,6 +228,7 @@ def relabel_scan(service, user_id, label_configs, label_id_cache, should_continu
         if unknown := lc.get("unknown_label"):
             if not unknown_label_id:
                 unknown_label_id = label_id_cache.get(unknown)
+                unknown_label_name = unknown
 
     if not unknown_label_id or not known_label_id:
         logger.warning("Relabel scan: missing label IDs (known=%s, unknown=%s)", known_label_id, unknown_label_id)
@@ -240,7 +243,7 @@ def relabel_scan(service, user_id, label_configs, label_id_cache, should_continu
             return total_relabeled
 
         # Find this sender's messages with unknown-sender label
-        query = f"from:{sender} label:unknown-sender"
+        query = f"from:{sender} label:{unknown_label_name}"
         msg_ids = []
         page_token = None
         while True:

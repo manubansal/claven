@@ -19,7 +19,7 @@ These run as a chain: sent → relabel → label. Each checks `should_continue()
 User-initiated actions that require no scan loops running:
 
 - **Archive unknown-sender** — removes INBOX label from unknown-sender messages
-- **Reset sent scan** — removes `claven/sent-scanned` label, triggering a full re-scan
+- **Reset sent scan** — removes the `c/s` (sent-scanned) label, triggering a full re-scan
 
 Exclusive jobs and scan loops cannot run concurrently for the same user. An exclusive job must cancel running scans before starting.
 

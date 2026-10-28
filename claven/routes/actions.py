@@ -16,7 +16,7 @@ router = APIRouter()
 
 @router.post("/api/actions/reset-sent-scan")
 def api_reset_sent_scan(request: Request):
-    """Start removing claven/sent-scanned labels to force a full re-scan."""
+    """Start removing c/s (sent-scanned) labels to force a full re-scan."""
     session = _get_session(request)
     user_id = session["user_id"]
     logger.debug("api_reset_sent_scan: called for user %s", user_id)

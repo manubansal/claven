@@ -377,7 +377,7 @@ def _run_archive_unknown(user_id: str, job_id: str):
 
 
 def _run_reset_sent_scan(user_id: str, job_id: str):
-    """Remove claven/sent-scanned label from all sent messages."""
+    """Remove the c/s (sent-scanned) label from all sent messages."""
     def task_fn(service):
         from claven.core.scan import SENT_SCANNED_LABEL, _notify_progress
         from claven.core.gmail import gmail_retry, batch_remove_labels, _BATCH_LIMIT

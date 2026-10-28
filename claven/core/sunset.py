@@ -17,6 +17,7 @@ from claven.core.gmail import (
     batch_remove_labels,
     gmail_retry,
 )
+from claven.core.labels import LEGACY_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +29,12 @@ SUNSET_HOURS_CHOICES = (4, 12, 24, 72)
 DEFAULT_SUNSET_HOURS = 24
 
 # Countdown labels on mail waiting in Sunset. A label names the largest step
-# that still fits the time left, so "4h left" means at least 4 hours remain.
+# that still fits the time left, so "c/4h" means at least 4 hours remain.
 COUNTDOWN_STEPS = ((72, "3d"), (24, "24h"), (12, "12h"), (4, "4h"), (1, "1h"))
-COUNTDOWN_UNDER = "sunset/under 1h left"
-COUNTDOWN_LABELS = tuple(f"sunset/{name} left" for _, name in COUNTDOWN_STEPS) + (COUNTDOWN_UNDER,)
+COUNTDOWN_UNDER = "c/<1h"
+COUNTDOWN_LABELS = tuple(f"c/{name}" for _, name in COUNTDOWN_STEPS) + (COUNTDOWN_UNDER,)
+# Countdown names from before the c/ codes, still deleted when a user leaves Sunset.
+_OLD_COUNTDOWN_LABELS = tuple(old for old, new in LEGACY_NAMES.items() if new in COUNTDOWN_LABELS)
 
 
 def sunset_cutoff(now: datetime, sunset_hours: int, mode_changed_at: datetime | None) -> datetime | None:
@@ -79,7 +82,7 @@ def countdown_label(remaining: timedelta) -> str:
     """Countdown label for the time left, rounded down to a step."""
     for hours, name in COUNTDOWN_STEPS:
         if remaining >= timedelta(hours=hours):
-            return f"sunset/{name} left"
+            return f"c/{name}"
     logger.debug("countdown_label: %s left, under the smallest step", remaining)
     return COUNTDOWN_UNDER
 
@@ -145,7 +148,7 @@ def clear_countdowns(service) -> int:
     labels = gmail_retry(lambda: service.users().labels().list(userId="me").execute()).get("labels", [])
     deleted = 0
     for label in labels:
-        if label["name"] in COUNTDOWN_LABELS:
+        if label["name"] in COUNTDOWN_LABELS or label["name"] in _OLD_COUNTDOWN_LABELS:
             gmail_retry(lambda lid=label["id"]: service.users().labels().delete(userId="me", id=lid).execute())
             deleted += 1
         else:

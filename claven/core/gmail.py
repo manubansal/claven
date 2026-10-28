@@ -5,6 +5,9 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+from claven.core.labels import LEGACY_NAMES, label_body
 
 logger = logging.getLogger(__name__)
 
@@ -113,46 +116,105 @@ def get_message_headers(service, message_id):
     return headers, msg.get("labelIds", [])
 
 
+def _style_label(service, name: str, write) -> dict:
+    """Create or patch a label with Claven's style; retry without colour if Gmail rejects it."""
+    body = label_body(name)
+    try:
+        return gmail_retry(lambda: write(body).execute())
+    except HttpError as exc:
+        if "color" not in body or getattr(exc.resp, "status", None) != 400:
+            logger.debug("_style_label: %s failed without a colour fallback: %s", name, exc)
+            raise
+        logger.warning("Gmail rejected colour for label %s, using default: %s", name, exc)
+        plain = {k: v for k, v in body.items() if k != "color"}
+        return gmail_retry(lambda: write(plain).execute())
+
+
+def _create_label(service, name: str, labels: list[dict]) -> str:
+    """Create a styled label (and its parent first, if missing). Appends to labels; returns the id."""
+    names = {l["name"].lower() for l in labels}
+    if "/" in name and (parent := name.rsplit("/", 1)[0]).lower() not in names:
+        logger.debug("_create_label: creating parent %s for %s", parent, name)
+        _create_label(service, parent, labels)
+    else:
+        logger.debug("_create_label: %s needs no new parent", name)
+    try:
+        created = _style_label(service, name, lambda b: service.users().labels().create(userId="me", body=b))
+    except HttpError as exc:
+        if getattr(exc.resp, "status", None) != 409:
+            logger.debug("_create_label: creating %s failed: %s", name, exc)
+            raise
+        # Another worker created it first: use theirs.
+        current = gmail_retry(lambda: service.users().labels().list(userId="me").execute()).get("labels", [])
+        label_id = next(l["id"] for l in current if l["name"].lower() == name.lower())
+        logger.debug("_create_label: %s already created elsewhere (id: %s)", name, label_id)
+        labels.append({"name": name, "id": label_id})
+        return label_id
+    logger.info("Created Gmail label: %s (id: %s)", name, created["id"])
+    labels.append({"name": name, "id": created["id"]})
+    return created["id"]
+
+
+def migrate_legacy_labels(service, labels: list[dict]) -> list[dict]:
+    """Rename labels from older Claven versions to their current names, in place.
+
+    Renaming keeps the label on every message, so nothing has to be relabeled.
+    A label is left alone if its new name is already taken. Returns the label
+    list with the renames applied.
+    """
+    labels = list(labels)
+    names = {l["name"] for l in labels}
+    for label in list(labels):
+        new_name = LEGACY_NAMES.get(label["name"])
+        if new_name is None:
+            logger.debug("migrate_legacy_labels: %s is current, keeping", label["name"])
+            continue
+        if new_name in names:
+            logger.warning("Not renaming label %s: %s already exists", label["name"], new_name)
+            continue
+        parent = new_name.rsplit("/", 1)[0]
+        if parent.lower() not in {n.lower() for n in names}:
+            logger.debug("migrate_legacy_labels: creating parent %s", parent)
+            _create_label(service, parent, labels)
+            names.add(parent)
+        else:
+            logger.debug("migrate_legacy_labels: parent %s exists", parent)
+        _style_label(service, new_name,
+                     lambda b, lid=label["id"]: service.users().labels().patch(userId="me", id=lid, body=b))
+        logger.info("Renamed Gmail label %s to %s (id: %s)", label["name"], new_name, label["id"])
+        labels[labels.index(label)] = {**label, "name": new_name}
+        names.discard(label["name"])
+        names.add(new_name)
+    return labels
+
+
+def _list_labels_migrated(service) -> list[dict]:
+    labels = gmail_retry(lambda: service.users().labels().list(userId="me").execute()).get("labels", [])
+    return migrate_legacy_labels(service, labels)
+
+
 def build_label_id_cache(service, label_names: list[str]) -> dict[str, str]:
-    """Return a {label_name: gmail_label_id} map, creating any labels that don't exist."""
-    all_labels = gmail_retry(lambda: service.users().labels().list(userId="me").execute()).get("labels", [])
-    existing = {l["name"]: l["id"] for l in all_labels}
+    """Return a {label_name: gmail_label_id} map, renaming old labels and creating missing ones."""
+    labels = _list_labels_migrated(service)
+    existing = {l["name"]: l["id"] for l in labels}
     cache = {}
     for name in label_names:
         if name in existing:
             cache[name] = existing[name]
         else:
-            created = gmail_retry(lambda n=name: service.users().labels().create(
-                userId="me",
-                body={"name": n, "labelListVisibility": "labelShow", "messageListVisibility": "show"},
-            ).execute())
-            logger.info("Created Gmail label: %s (id: %s)", name, created["id"])
-            cache[name] = created["id"]
+            logger.debug("build_label_id_cache: %s missing, creating", name)
+            cache[name] = _create_label(service, name, labels)
     return cache
 
 
 def ensure_label_exists(service, label_name):
-    """Create a label if it doesn't exist. Returns the label ID."""
-    results = gmail_retry(lambda: service.users().labels().list(userId="me").execute())
-    for label in results.get("labels", []):
+    """Create a label if it doesn't exist (renaming an old Claven label first). Returns the label ID."""
+    labels = _list_labels_migrated(service)
+    for label in labels:
         if label["name"].lower() == label_name.lower():
             return label["id"]
-
-    created = gmail_retry(lambda: (
-        service.users()
-        .labels()
-        .create(
-            userId="me",
-            body={
-                "name": label_name,
-                "labelListVisibility": "labelShow",
-                "messageListVisibility": "show",
-            },
-        )
-        .execute()
-    ))
-    logger.info("Created label: %s (id: %s)", label_name, created["id"])
-    return created["id"]
+    logger.debug("ensure_label_exists: %s missing, creating", label_name)
+    return _create_label(service, label_name, labels)
 
 
 def load_scan_checkpoint(data_dir):
