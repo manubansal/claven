@@ -77,6 +77,19 @@ LEGACY_NAMES = {
 RETIRED_NAMES = {"c/0h", "sunset/under 1h left"}
 
 
+def managed_visibility(name: str) -> dict:
+    """Visibility Claven keeps on an existing label, re-applied if it drifts. Empty if none.
+
+    c/s must stay hidden (it marks scanned sent mail, so it would show on every
+    thread you replied to); countdown labels are listed only while unread.
+    """
+    if name == SENT_SCANNED:
+        return {"labelListVisibility": "labelHide", "messageListVisibility": "hide"}
+    if name in COUNTDOWN_LABELS:
+        return {"labelListVisibility": COUNTDOWN_LIST_VISIBILITY}
+    return {}
+
+
 def label_body(name: str) -> dict:
     """Gmail labels.create/patch body for a label: name, visibility, and colour."""
     body = {"name": name, "labelListVisibility": "labelShow", "messageListVisibility": "show"}

@@ -727,6 +727,7 @@ class TestWebhookGmail:
                 mock_db.get_user_by_email.return_value = {"id": "uid-1", "email": "user@example.com"}
                 mock_db.get_history_id.return_value = 100
                 mock_db.get_known_senders.return_value = set()
+                mock_db.get_pending_relabel_senders.return_value = []
                 mock_auth.get_service.return_value = MagicMock()
                 mock_poll.return_value = 200
                 with _mock_pubsub_token():
@@ -748,6 +749,7 @@ class TestWebhookGmail:
                 mock_db.get_user_by_email.return_value = {"id": "uid-1", "email": "user@example.com"}
                 mock_db.get_history_id.return_value = 100
                 mock_db.get_known_senders.return_value = set()
+                mock_db.get_pending_relabel_senders.return_value = []
                 mock_auth.get_service.return_value = MagicMock()
                 mock_poll.return_value = 3
                 with _mock_pubsub_token():
@@ -759,7 +761,7 @@ class TestWebhookGmail:
                         )
         mock_db.increment_processed_count.assert_called_once_with(ANY, "uid-1", 3)
 
-    def _webhook(self, has_new, sent_status="complete"):
+    def _webhook(self, has_new, sent_status="complete", pending=()):
         with patch.dict("os.environ", _ENV):
             with patch("claven.server.db") as mock_db, patch("claven.server.auth") as mock_auth, \
                  patch("claven.server.has_new_messages", return_value=has_new), \
@@ -769,6 +771,7 @@ class TestWebhookGmail:
                 mock_db.get_user_by_email.return_value = {"id": "uid-1", "email": "user@example.com"}
                 mock_db.get_history_id.return_value = 100
                 mock_db.get_sent_scan_progress.return_value = {"status": sent_status, "updated_at": None}
+                mock_db.get_pending_relabel_senders.return_value = list(pending)
                 mock_db.get_known_senders.return_value = set()
                 mock_auth.get_service.return_value = MagicMock()
                 with _mock_pubsub_token():
@@ -789,6 +792,21 @@ class TestWebhookGmail:
         _, _, mock_poll, mock_build = self._webhook(has_new=True)
         mock_poll.assert_called_once()
         mock_build.assert_called_once()
+
+    def test_new_known_senders_are_relabeled_right_away(self):
+        # Replying to an unknown sender makes them known; their earlier mail
+        # should move to c/k now, not on the next dashboard visit.
+        with patch("claven.server.relabel_scan", return_value=2) as mock_relabel, \
+             patch("claven.routes.internal.existing_countdown_ids", return_value={"c/4h": "L4"}):
+            _, mock_db, _, _ = self._webhook(has_new=True, pending=["alice@example.com"])
+        mock_relabel.assert_called_once()
+        assert mock_relabel.call_args.args[1] == "uid-1"
+        assert mock_relabel.call_args.kwargs["countdown_ids"] == {"c/4h": "L4"}
+
+    def test_no_relabel_without_new_known_senders(self):
+        with patch("claven.server.relabel_scan") as mock_relabel:
+            self._webhook(has_new=True, pending=[])
+        mock_relabel.assert_not_called()
 
     def test_unfinished_sent_scan_still_reconciles(self):
         _, _, _, mock_build = self._webhook(has_new=False, sent_status="error.unknown")
