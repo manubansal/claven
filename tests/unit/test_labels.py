@@ -24,7 +24,7 @@ class TestNames:
         assert LEGACY_NAMES["known-sender"] == KNOWN
         assert LEGACY_NAMES["unknown-sender"] == UNKNOWN
         assert LEGACY_NAMES["claven/sent-scanned"] == SENT_SCANNED
-        assert LEGACY_NAMES["sunset/under 1h left"] == "c/<1h"
+        assert LEGACY_NAMES["sunset/under 1h left"] == "c/0h"
 
 
 class TestColors:
@@ -34,7 +34,7 @@ class TestColors:
         assert LABEL_COLORS["c/12h"]["backgroundColor"] == "#fad165"  # yellow
         assert LABEL_COLORS["c/4h"]["backgroundColor"] == "#ffad47"   # orange
         assert LABEL_COLORS["c/1h"]["backgroundColor"] == "#fb4c2f"   # red
-        assert LABEL_COLORS["c/<1h"]["backgroundColor"] == "#ac2b16"  # dark red
+        assert LABEL_COLORS["c/0h"]["backgroundColor"] == "#ac2b16"  # dark red
 
     @pytest.mark.parametrize("name", sorted(LABEL_COLORS))
     def test_colors_are_from_gmail_palette(self, name):

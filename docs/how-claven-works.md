@@ -72,7 +72,7 @@ The inbox mode decides what happens to unknown-sender mail after it is labeled:
 
 Sunset gives you a chance to skim every message in your normal inbox, by sender, subject and preview, without visiting a separate label. Whatever you ignore is filed away for you.
 
-While a message waits, it carries a countdown label showing how much time it has left, such as `c/4h`. The label shows the time left rounded down to a step (`c/3d`, `c/24h`, `c/12h`, `c/4h`, `c/1h`, then `c/<1h`), so `c/4h` means at least four hours remain. The colour runs from calm to urgent: blue, yellow, orange, red. Countdown labels are updated every 15 minutes, and a new message gets its first one within 15 minutes of arriving. Reading or starring the message removes its countdown label. If you leave Sunset mode, Claven deletes the countdown labels. Claven checks for expired mail every 15 minutes, so an expired message can stay up to 15 minutes past its timer. When you switch to Sunset, mail already in your inbox gets a full timer from the moment you switch.
+While a message waits, it carries a countdown label showing how much time it has left, such as `c/4h`. The label shows the time left rounded down to a step (`c/3d`, `c/24h`, `c/12h`, `c/4h`, `c/1h`, then `c/0h`), so `c/4h` means at least four hours remain. The colour runs from calm to urgent: blue, yellow, orange, red. Countdown labels are updated every 15 minutes, and a new message gets its first one within 15 minutes of arriving. Reading or starring the message removes its countdown label. If you leave Sunset mode, Claven deletes the countdown labels. Claven checks for expired mail every 15 minutes, so an expired message can stay up to 15 minutes past its timer. When you switch to Sunset, mail already in your inbox gets a full timer from the moment you switch.
 
 Archived mail is never deleted. It stays in All Mail with its `c/u` label.
 
@@ -98,7 +98,7 @@ Claven keeps its labels short and groups them under one `c` label in your Gmail 
 | `c/12h` | Sunset: at least 12 hours left | Yellow |
 | `c/4h` | Sunset: at least 4 hours left | Orange |
 | `c/1h` | Sunset: at least 1 hour left | Red |
-| `c/<1h` | Sunset: under an hour left | Dark red |
+| `c/0h` | Sunset: under an hour left | Dark red |
 | `c/s` | Sent message already scanned (hidden) | — |
 
 Earlier versions used longer names (`c/k`, `c/u`, `c/s`, `sunset/4h left`, …). Claven renames those in place the next time it runs, so every message keeps its label. If you change a label's colour in Gmail, Claven leaves your choice alone.
@@ -110,7 +110,7 @@ Earlier versions used longer names (`c/k`, `c/u`, `c/s`, `sunset/4h left`, …).
 | `c/s` | Sent scan | After extracting recipients from a sent message | Sent messages, after their recipients are saved to the database |
 | `c/k` | Label scan | When an unlabeled message's sender is in the known senders list | Unlabeled inbox messages (or all mail, depending on scope) |
 | `c/u` | Label scan | When an unlabeled message's sender is NOT in the known senders list | Unlabeled inbox messages (or all mail, depending on scope) |
-| `c/3d` … `c/<1h` | Sunset sweep | Every 15 minutes, in Sunset mode | Unread, unstarred `c/u` messages in the inbox. One countdown label per message, moved to the next step as time runs down |
+| `c/3d` … `c/0h` | Sunset sweep | Every 15 minutes, in Sunset mode | Unread, unstarred `c/u` messages in the inbox. One countdown label per message, moved to the next step as time runs down |
 
 ### Labels swapped
 
@@ -124,7 +124,7 @@ Earlier versions used longer names (`c/k`, `c/u`, `c/s`, `sunset/4h left`, …).
 |---|---|---|
 | `INBOX` | Gatekeeper mode | When an unknown-sender message is labeled. |
 | `INBOX` | Sunset mode | When an unknown-sender message is still unread and unstarred after the Sunset timer. |
-| `c/3d` … `c/<1h` | Sunset sweep | When the message is read, starred, or archived. All countdown labels are deleted when you leave Sunset mode. |
+| `c/3d` … `c/0h` | Sunset sweep | When the message is read, starred, or archived. All countdown labels are deleted when you leave Sunset mode. |
 | `INBOX` | Archive action | When the user clicks "Archive unknown-sender" on the dashboard. Removes the INBOX label from individual messages with the `c/u` label, moving them out of the inbox. The `c/u` label itself stays on the message. |
 
 ### Labels Claven never modifies

@@ -31,7 +31,7 @@ DEFAULT_SUNSET_HOURS = 24
 # Countdown labels on mail waiting in Sunset. A label names the largest step
 # that still fits the time left, so "c/4h" means at least 4 hours remain.
 COUNTDOWN_STEPS = ((72, "3d"), (24, "24h"), (12, "12h"), (4, "4h"), (1, "1h"))
-COUNTDOWN_UNDER = "c/<1h"
+COUNTDOWN_UNDER = "c/0h"
 COUNTDOWN_LABELS = tuple(f"c/{name}" for _, name in COUNTDOWN_STEPS) + (COUNTDOWN_UNDER,)
 # Countdown names from before the c/ codes, still deleted when a user leaves Sunset.
 _OLD_COUNTDOWN_LABELS = tuple(old for old, new in LEGACY_NAMES.items() if new in COUNTDOWN_LABELS)

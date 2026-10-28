@@ -105,7 +105,7 @@ from claven.core.sunset import (  # noqa: E402
 
 class TestCountdownLabel:
     def test_labels_are_short_codes_under_c(self):
-        assert COUNTDOWN_LABELS == ("c/3d", "c/24h", "c/12h", "c/4h", "c/1h", "c/<1h")
+        assert COUNTDOWN_LABELS == ("c/3d", "c/24h", "c/12h", "c/4h", "c/1h", "c/0h")
 
     @pytest.mark.parametrize("hours,label", [
         (80, "c/3d"),
@@ -116,8 +116,8 @@ class TestCountdownLabel:
         (4, "c/4h"),        # "4h left" means at least 4h remain
         (3.99, "c/1h"),
         (1, "c/1h"),
-        (0.5, "c/<1h"),
-        (-1, "c/<1h"),
+        (0.5, "c/0h"),
+        (-1, "c/0h"),
     ])
     def test_rounds_time_left_down_to_a_step(self, hours, label):
         assert countdown_label(timedelta(hours=hours)) == label
