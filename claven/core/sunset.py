@@ -1,6 +1,11 @@
 """Sunset mode: unknown-sender mail stays in the inbox for a timer, then is
 archived if it is still unread and unstarred.
 
+While mail waits, a countdown label (c/24h, ...) takes the place of the
+unknown label: a countdown already means "unknown sender". Once the mail
+stops waiting (read, starred, archived, or the user leaves Sunset) it goes
+back to the unknown label.
+
 Stateless: each sweep asks Gmail for unread, unstarred unknown-sender inbox
 mail older than the cutoff, so no per-message state is stored and running a
 sweep twice is harmless.
@@ -54,14 +59,32 @@ def sunset_cutoff(now: datetime, sunset_hours: int, mode_changed_at: datetime | 
     return now - timer
 
 
+def unknown_group(unknown_label: str, countdown_labels=COUNTDOWN_LABELS) -> str:
+    """Gmail search term for unknown-sender mail: the unknown label or any countdown label.
+
+    Pass only countdown labels that exist, so the search never names a missing label.
+    """
+    names = [unknown_label, *countdown_labels]
+    if len(names) == 1:
+        logger.debug("unknown_group: no countdown labels")
+        return f"label:{unknown_label}"
+    return "{" + " ".join(f"label:{name}" for name in names) + "}"
+
+
 def sunset_query(unknown_label: str, cutoff: datetime) -> str:
     """Gmail search for unknown-sender inbox mail that has expired unread."""
-    return f"in:inbox is:unread -is:starred label:{unknown_label} before:{int(cutoff.timestamp())}"
+    return f"{waiting_query(unknown_label)} before:{int(cutoff.timestamp())}"
 
 
 def waiting_query(unknown_label: str) -> str:
     """Gmail search for unknown-sender mail still waiting in the inbox."""
-    return f"in:inbox is:unread -is:starred label:{unknown_label}"
+    return f"in:inbox is:unread -is:starred {unknown_group(unknown_label)}"
+
+
+def existing_countdown_ids(service) -> dict[str, str]:
+    """{name: id} for the countdown labels in the mailbox, without creating any."""
+    labels = gmail_retry(lambda: service.users().labels().list(userId="me").execute()).get("labels", [])
+    return {label["name"]: label["id"] for label in labels if label["name"] in COUNTDOWN_LABELS}
 
 
 def _list_ids(service, **query) -> list[str]:
@@ -105,14 +128,16 @@ def arrival_countdown(internal_date_ms: int, sunset_hours: int, mode_changed_at:
     return countdown_label(message_expiry(internal_date_ms, sunset_hours, mode_changed_at) - now)
 
 
-def update_countdowns(service, unknown_label: str, now: datetime, sunset_hours: int,
+def update_countdowns(service, unknown_label: str, unknown_label_id: str, now: datetime, sunset_hours: int,
                       mode_changed_at: datetime | None, label_ids: dict[str, str]) -> int:
-    """Put the right countdown label on each waiting message; strip it from the rest.
+    """Put the right countdown label, in place of the unknown label, on each waiting
+    message; put the unknown label back on mail that stopped waiting.
 
     label_ids maps each name in COUNTDOWN_LABELS to its Gmail label id.
-    Returns the number of waiting messages whose countdown label changed.
+    Returns the number of waiting messages whose labels changed.
     """
     countdown_ids = set(label_ids.values())
+    marker_ids = countdown_ids | {unknown_label_id}
     waiting = _list_ids(service, q=waiting_query(unknown_label))
 
     to_step = defaultdict(list)
@@ -124,24 +149,25 @@ def update_countdowns(service, unknown_label: str, now: datetime, sunset_hours: 
                 continue
             remaining = message_expiry(internal_date_ms, sunset_hours, mode_changed_at) - now
             want = label_ids[countdown_label(remaining)]
-            if set(labels) & countdown_ids != {want}:
+            if set(labels) & marker_ids != {want}:
                 to_step[want].append(message_id)
             else:
                 logger.debug("update_countdowns: %s already on the right step", message_id)
 
     changed = 0
     for want, ids in to_step.items():
-        batch_modify_labels(service, ids, add_label_ids=[want], remove_label_ids=sorted(countdown_ids - {want}))
+        batch_modify_labels(service, ids, add_label_ids=[want], remove_label_ids=sorted(marker_ids - {want}))
         changed += len(ids)
 
-    # Read, starred, or archived mail no longer waits: drop its countdown label.
+    # Read, starred, or archived mail no longer waits: back to the unknown label.
     waiting_set = set(waiting)
     stale = set()
     for label_id in countdown_ids:
         stale.update(m for m in _list_ids(service, labelIds=[label_id]) if m not in waiting_set)
     if stale:
         logger.debug("update_countdowns: clearing countdown from %d messages", len(stale))
-        batch_modify_labels(service, sorted(stale), remove_label_ids=sorted(countdown_ids))
+        batch_modify_labels(service, sorted(stale), add_label_ids=[unknown_label_id],
+                            remove_label_ids=sorted(countdown_ids))
     else:
         logger.debug("update_countdowns: no stale countdown labels")
 
@@ -149,8 +175,8 @@ def update_countdowns(service, unknown_label: str, now: datetime, sunset_hours: 
     return changed
 
 
-def clear_countdowns(service) -> int:
-    """Delete Claven's countdown labels (which also removes them from every message).
+def clear_countdowns(service, unknown_label_id: str) -> int:
+    """Delete Claven's countdown labels, putting the unknown label back on their mail first.
 
     Used after a user leaves Sunset. Returns the number of labels deleted.
     """
@@ -158,6 +184,12 @@ def clear_countdowns(service) -> int:
     deleted = 0
     for label in labels:
         if label["name"] in COUNTDOWN_LABELS or label["name"] in _OLD_COUNTDOWN_LABELS:
+            message_ids = _list_ids(service, labelIds=[label["id"]])
+            if message_ids:
+                logger.debug("clear_countdowns: %d messages on %s go back to unknown", len(message_ids), label["name"])
+                batch_modify_labels(service, message_ids, add_label_ids=[unknown_label_id])
+            else:
+                logger.debug("clear_countdowns: %s is on no messages", label["name"])
             gmail_retry(lambda lid=label["id"]: service.users().labels().delete(userId="me", id=lid).execute())
             deleted += 1
         else:

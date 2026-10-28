@@ -385,7 +385,7 @@ class TestInitialScan:
 # ---------------------------------------------------------------------------
 
 class TestSunsetCountdownOnArrival:
-    """In Sunset mode, live labeling adds the starting countdown with c/u."""
+    """In Sunset mode, waiting unknown mail gets its starting countdown instead of c/u."""
 
     _CONFIGS = [{"id": "c/k", "unknown_label": "c/u", "rules": [{"field": "from", "known_sender": True}]}]
     _CACHE = {"c/k": "LK", "c/u": "LU"}
@@ -406,19 +406,23 @@ class TestSunsetCountdownOnArrival:
             process_message(MagicMock(), "m1", self._CONFIGS, self._CACHE, {"friend@example.com"}, sunset=sunset)
         return mock_apply
 
-    def test_unread_unknown_inbox_mail_gets_countdown_in_same_call(self):
+    def test_unread_unknown_inbox_mail_gets_countdown_instead_of_unknown(self):
         mock_apply = self._process(["INBOX", "UNREAD"])
         # 24h timer, arrived a minute ago: gone within 24h.
-        mock_apply.assert_called_once_with(ANY, "m1", "LU", "id-c/24h")
+        mock_apply.assert_called_once_with(ANY, "m1", "id-c/24h")
+
+    def test_mail_already_counting_down_is_left_alone(self):
+        mock_apply = self._process(["INBOX", "UNREAD", "id-c/12h"])
+        mock_apply.assert_not_called()
 
     def test_three_day_timer_starts_at_3d_step(self):
         mock_apply = self._process(["INBOX", "UNREAD"], sunset=self._sunset(hours=72))
-        mock_apply.assert_called_once_with(ANY, "m1", "LU", "id-c/3d")
+        mock_apply.assert_called_once_with(ANY, "m1", "id-c/3d")
 
     def test_late_processed_mail_gets_step_for_actual_time_left(self):
         # Arrived 21h ago (e.g. push missed, picked up by the poll): 3h left.
         mock_apply = self._process(["INBOX", "UNREAD"], arrived_ago_min=21 * 60)
-        mock_apply.assert_called_once_with(ANY, "m1", "LU", "id-c/4h")
+        mock_apply.assert_called_once_with(ANY, "m1", "id-c/4h")
 
     @pytest.mark.parametrize("labels", [["INBOX"], ["INBOX", "UNREAD", "STARRED"], ["UNREAD"]])
     def test_read_starred_or_archived_mail_gets_no_countdown(self, labels):

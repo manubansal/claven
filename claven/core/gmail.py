@@ -537,11 +537,12 @@ def batch_modify_labels(service, message_ids, add_label_ids=(), remove_label_ids
         gmail_retry(lambda b=body: service.users().messages().batchModify(userId="me", body=b).execute())
 
 
-def batch_swap_labels(service, message_ids, remove_label_id, add_label_id, max_retries=3):
+def batch_swap_labels(service, message_ids, remove_label_id, add_label_id, max_retries=3, also_remove=()):
     """Atomically swap labels on up to _BATCH_LIMIT messages.
 
     Each message gets removeLabelIds + addLabelIds in a single modify call,
-    so there's no window where the message has neither label.
+    so there's no window where the message has neither label. also_remove
+    names more labels to drop in the same call.
 
     Returns the number of successful swaps.
     """
@@ -555,7 +556,7 @@ def batch_swap_labels(service, message_ids, remove_label_id, add_label_id, max_r
     requests = [
         (service.users().messages().modify(
             userId="me", id=mid,
-            body={"removeLabelIds": [remove_label_id], "addLabelIds": [add_label_id]},
+            body={"removeLabelIds": [remove_label_id, *also_remove], "addLabelIds": [add_label_id]},
         ), mid)
         for mid in message_ids[:_BATCH_LIMIT]
     ]

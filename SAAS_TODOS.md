@@ -664,6 +664,7 @@ Replaced the planned `auto_archive_unknown` boolean with a three-way per-user mo
 - [x] Gatekeeper: label scan and live labeling archive unknown-sender mail as they label it (the old auto-archive)
 - [x] Sunset: unknown-sender mail stays in the inbox; `/internal/sunset` (Cloud Scheduler, every 15 min) archives it once it is older than the timer (4h/12h/24h/3d) and still unread and unstarred. Stateless Gmail search, no per-message state. Mail already in the inbox when the user switches gets a full timer from the switch.
 - [x] Sunset countdown labels (`c/3d` … `c/1h`) on waiting mail, rounded up to a step ("gone within"), first one added at live labeling; removed when read, starred, or archived; all deleted when the user leaves Sunset (`sunset_countdown_active`, migration 0014)
+- [x] Countdown labels replace `c/u` while mail waits (no `c/u` + `c/24h` pair); mail goes back to `c/u` when read, starred, archived, or the user leaves Sunset. Scans, relabel, archive job and dashboard counts treat countdown labels as unknown
 - [x] `POST /api/settings/inbox-mode`; `/api/me` returns `inbox_mode`, `sunset_hours`; dashboard "Inbox mode" section with the timer dropdown
 - [ ] Drop `scan_state.auto_archive_unknown` and the legacy `/api/settings/auto-archive` endpoint once rollback to pre-#113 is no longer needed
 - [x] Short label codes under `c/` (`c/k`, `c/u`, `c/3d` … `c/1h`, hidden `c/s`) with traffic-light colours; old names renamed in place on the next label lookup (`claven/core/labels.py`, `migrate_legacy_labels`)

@@ -157,9 +157,10 @@ def internal_sunset(request: Request):
     """Sunset sweep: archive expired unknown-sender mail and update countdown labels.
 
     For users in Sunset mode, unread, unstarred unknown-sender inbox mail older
-    than the user's timer is archived, and every message still waiting gets a
-    countdown label (c/4h, ...). For users who left Sunset, the
-    countdown labels are deleted. Idempotent. Intended to be triggered every
+    than the user's timer is archived, and every message still waiting carries a
+    countdown label (c/4h, ...) in place of the unknown label. For users who left
+    Sunset, the countdown labels are deleted and their mail goes back to the
+    unknown label. Idempotent. Intended to be triggered every
     15 minutes by Cloud Scheduler.
     """
     _require_internal_auth(request)
@@ -177,7 +178,8 @@ def internal_sunset(request: Request):
         with _srv.db.get_connection() as conn:
             try:
                 service = _srv.auth.get_service(conn, user_id, os.environ["TOKEN_ENCRYPTION_KEY"])
-                deleted = clear_countdowns(service)
+                unknown_label_id = build_label_id_cache(service, [unknown_label])[unknown_label]
+                deleted = clear_countdowns(service, unknown_label_id)
                 _srv.db.set_sunset_countdown_active(conn, user_id, False)
                 logger.debug("sunset: %s left Sunset, deleted %d countdown labels", user_id, deleted)
             except Exception as exc:
@@ -207,7 +209,8 @@ def internal_sunset(request: Request):
                 else:
                     logger.debug("sunset: %s nothing archived", user_id)
                 countdown_ids = {name: label_ids[name] for name in COUNTDOWN_LABELS}
-                update_countdowns(service, unknown_label, now, user["sunset_hours"], user["changed_at"], countdown_ids)
+                update_countdowns(service, unknown_label, label_ids[unknown_label], now,
+                                  user["sunset_hours"], user["changed_at"], countdown_ids)
                 _srv.db.set_sunset_countdown_active(conn, user_id, True)
                 archived_total += archived
                 results.append({"user_id": user_id, "status": "ok", "archived": archived})

@@ -336,6 +336,21 @@ class TestUnlabeledQuery:
         assert "-label:known-sender" in query
         assert "-label:unknown-sender" in query
 
+    def test_countdown_labels_count_as_labeled(self):
+        # Mail waiting in Sunset carries a countdown label instead of the unknown label.
+        from claven.core.scan import _unlabeled_query
+        query = _unlabeled_query(_LABEL_CONFIGS, countdown_labels=["c/24h", "c/4h"])
+        assert query == "in:inbox -label:known-sender -label:unknown-sender -label:c/24h -label:c/4h"
+
+    def test_scan_inbox_skips_mail_counting_down(self):
+        from claven.core.scan import scan_inbox
+        with patch("claven.core.scan.list_messages", return_value=[]) as mock_list, \
+             patch("claven.core.scan.get_profile", return_value={"historyId": "99"}), \
+             patch("claven.core.scan.db"), \
+             patch("claven.core.scan.time.sleep"):
+            scan_inbox(MagicMock(), MagicMock(), "u1", _LABEL_CONFIGS, _LABEL_ID_CACHE, countdown_labels=["c/4h"])
+        assert "-label:c/4h" in mock_list.call_args.kwargs["query"]
+
 
 # ---------------------------------------------------------------------------
 # scan_inbox — allmail scope labels known-sender only
@@ -653,6 +668,20 @@ class TestLabelNames:
             mock_db.get_pending_relabel_senders.return_value = ["alice@example.com"]
             relabel_scan(service, "u1", configs, {"c/k": "LK", "c/u": "LU"})
         assert service.users().messages().list.call_args.kwargs["q"] == "from:alice@example.com label:c/u"
+
+    def test_relabel_moves_counting_down_mail_to_known(self):
+        # In Sunset, a sender's waiting mail carries a countdown label instead of c/u.
+        from claven.core.scan import relabel_scan
+        configs = [{"id": "c/k", "unknown_label": "c/u", "rules": []}]
+        service = MagicMock()
+        service.users().messages().list().execute.return_value = {"messages": [{"id": "m1"}]}
+        with patch("claven.core.scan.db") as mock_db, \
+             patch("claven.core.scan.batch_swap_labels", return_value=1) as mock_swap, \
+             patch("claven.core.scan._interruptible_sleep"):
+            mock_db.get_pending_relabel_senders.return_value = ["alice@example.com"]
+            relabel_scan(service, "u1", configs, {"c/k": "LK", "c/u": "LU"}, countdown_ids={"c/4h": "L4"})
+        assert service.users().messages().list.call_args.kwargs["q"] == "from:alice@example.com {label:c/u label:c/4h}"
+        mock_swap.assert_called_once_with(service, ["m1"], "LU", "LK", also_remove=["L4"])
 
     def test_config_uses_short_codes(self):
         import yaml

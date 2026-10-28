@@ -161,6 +161,16 @@ def test_get_message_metadata_returns_arrival_time():
     assert internal_date_ms == 1761645600000
 
 
+def test_batch_swap_labels_can_remove_extra_labels():
+    from unittest.mock import patch
+    from claven.core.gmail import batch_swap_labels
+    service = mock_service()
+    with patch("claven.core.gmail._run_batch_with_retry"):
+        batch_swap_labels(service, ["m1"], "LU", "LK", also_remove=["L4"])
+    service.users().messages().modify.assert_called_with(
+        userId="me", id="m1", body={"removeLabelIds": ["LU", "L4"], "addLabelIds": ["LK"]})
+
+
 def test_apply_label_adds_several_labels_in_one_call():
     service = mock_service()
     apply_label(service, "m1", "LU", "L12")

@@ -18,7 +18,7 @@ import time as _time
 from datetime import datetime, timezone, timedelta
 
 import claven.server as _srv
-from claven.core.sunset import COUNTDOWN_LABELS
+from claven.core.sunset import COUNTDOWN_LABELS, existing_countdown_ids
 
 logger = logging.getLogger(__name__)
 
@@ -300,6 +300,7 @@ def _run_relabel_scan(user_id: str):
             service, user_id, label_configs, label_id_cache,
             should_continue=lambda: _should_continue_scan(user_id),
             shutdown_event=_srv._shutdown_event,
+            countdown_ids=existing_countdown_ids(service),
         )
     _run_task(user_id, "Relabel scan", task_fn,
               set_status=lambda conn, uid, s: None)
@@ -321,6 +322,7 @@ def _run_inbox_scan(user_id: str):
             shutdown_event=_srv._shutdown_event,
             scope=scope,
             auto_archive_unknown=auto_archive,
+            countdown_labels=list(existing_countdown_ids(service)),
         )
     _run_task(user_id, "Label scan", task_fn,
               set_status=_srv.db.set_inbox_scan_status)
@@ -342,20 +344,25 @@ def _run_archive_unknown(user_id: str, job_id: str):
         if not unknown_label_id:
             logger.warning("Archive job %s: no unknown-sender label found", job_id)
             return 0
+        # In Sunset, waiting unknown-sender mail carries a countdown label instead.
+        marker_ids = [unknown_label_id, *(label_id_by_name[n] for n in COUNTDOWN_LABELS if n in label_id_by_name)]
 
-        # Paginate to get all message IDs
+        # Paginate to get all message IDs (labelIds is AND, so one listing per label)
         all_msg_ids = []
-        page_token = None
-        while True:
-            kwargs = {"userId": "me", "labelIds": ["INBOX", unknown_label_id], "maxResults": 500}
-            if page_token:
-                kwargs["pageToken"] = page_token
-            result = service.users().messages().list(**kwargs).execute()
-            all_msg_ids.extend(m["id"] for m in result.get("messages", []))
-            page_token = result.get("nextPageToken")
-            if not page_token:
-                break
+        for marker_id in marker_ids:
+            page_token = None
+            while True:
+                kwargs = {"userId": "me", "labelIds": ["INBOX", marker_id], "maxResults": 500}
+                if page_token:
+                    kwargs["pageToken"] = page_token
+                result = service.users().messages().list(**kwargs).execute()
+                all_msg_ids.extend(m["id"] for m in result.get("messages", []))
+                page_token = result.get("nextPageToken")
+                if not page_token:
+                    logger.debug("Archive job %s: listed label %s", job_id, marker_id)
+                    break
 
+        all_msg_ids = list(dict.fromkeys(all_msg_ids))
         total = len(all_msg_ids)
         from claven.core.scan import _notify_progress
         with _srv.db.get_connection() as conn:
