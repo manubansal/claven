@@ -2155,3 +2155,119 @@ class TestApiTopSenders:
         # big.com=3, small.com=1
         assert body["top_domains"][0] == {"domain": "big.com", "count": 3}
         assert body["top_domains"][1] == {"domain": "small.com", "count": 1}
+
+
+# ── Inbox mode (Label only / Gatekeeper / Sunset) ────────────────────────────
+
+class TestApiInboxMode:
+    def _post(self, body):
+        token = _make_session_token()
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.server.db") as mock_db:
+                _fake_db_ctx(mock_db)
+                with TestClient(app) as client:
+                    client.cookies.set("session", token)
+                    response = client.post("/api/settings/inbox-mode", json=body)
+        return response, mock_db
+
+    def test_no_token_returns_401(self):
+        with patch.dict("os.environ", _ENV):
+            with TestClient(app) as client:
+                response = client.post("/api/settings/inbox-mode", json={"mode": "sunset"})
+        assert response.status_code == 401
+
+    def test_invalid_mode_returns_400(self):
+        response, mock_db = self._post({"mode": "nope"})
+        assert response.status_code == 400
+        mock_db.set_inbox_mode.assert_not_called()
+
+    def test_invalid_hours_returns_400(self):
+        response, mock_db = self._post({"mode": "sunset", "sunset_hours": 5})
+        assert response.status_code == 400
+        mock_db.set_inbox_mode.assert_not_called()
+
+    def test_sets_sunset_with_hours(self):
+        response, mock_db = self._post({"mode": "sunset", "sunset_hours": 12})
+        assert response.status_code == 200
+        assert response.json() == {"ok": True, "inbox_mode": "sunset", "sunset_hours": 12}
+        mock_db.set_inbox_mode.assert_called_once_with(ANY, "uid-1", "sunset", sunset_hours=12)
+
+    def test_mode_without_hours_keeps_current_timer(self):
+        response, mock_db = self._post({"mode": "gatekeeper"})
+        assert response.status_code == 200
+        mock_db.set_inbox_mode.assert_called_once_with(ANY, "uid-1", "gatekeeper", sunset_hours=None)
+
+    def test_legacy_auto_archive_endpoint_still_works(self):
+        token = _make_session_token()
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.server.db") as mock_db:
+                _fake_db_ctx(mock_db)
+                with TestClient(app) as client:
+                    client.cookies.set("session", token)
+                    response = client.post("/api/settings/auto-archive", json={"enabled": True})
+        assert response.status_code == 200
+        mock_db.set_auto_archive_unknown.assert_called_once_with(ANY, "uid-1", True)
+
+    def test_api_me_returns_inbox_mode(self):
+        token = _make_session_token()
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.server.db") as mock_db, \
+                 patch("claven.server.auth") as mock_auth:
+                _fake_db_ctx(mock_db)
+                mock_db.get_user_by_id.return_value = {"id": "uid-1", "email": "user@example.com"}
+                mock_db.get_scan_scope.return_value = "inbox"
+                mock_db.get_inbox_mode.return_value = {"mode": "sunset", "sunset_hours": 72, "changed_at": None}
+                mock_auth.get_service.return_value = TestApiMe._make_gmail_service(TestApiMe())
+                with TestClient(app) as client:
+                    client.cookies.set("session", token)
+                    response = client.get("/api/me")
+        body = response.json()
+        assert body["inbox_mode"] == "sunset"
+        assert body["sunset_hours"] == 72
+
+
+class TestInternalSunset:
+    _AUTH = {"Authorization": "Bearer test-internal-secret"}
+
+    def test_requires_internal_auth(self):
+        with patch.dict("os.environ", _ENV):
+            with TestClient(app) as client:
+                response = client.post("/internal/sunset")
+        assert response.status_code == 401
+
+    def test_archives_expired_mail_for_connected_sunset_users(self):
+        from datetime import datetime, timedelta, timezone
+        long_ago = datetime.now(timezone.utc) - timedelta(days=3)
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.server.db") as mock_db, \
+                 patch("claven.server.auth") as mock_auth, \
+                 patch("claven.routes.internal.archive_expired_unknown", return_value=2) as mock_archive:
+                _fake_db_ctx(mock_db)
+                mock_db.get_sunset_users.return_value = [
+                    {"user_id": "uid-1", "sunset_hours": 24, "changed_at": long_ago},
+                    {"user_id": "uid-2", "sunset_hours": 24, "changed_at": long_ago},
+                ]
+                mock_db.get_history_id.side_effect = lambda conn, uid: 99 if uid == "uid-1" else None
+                with TestClient(app) as client:
+                    response = client.post("/internal/sunset", headers=self._AUTH)
+        assert response.status_code == 200
+        assert response.json()["archived"] == 2
+        mock_archive.assert_called_once()
+        assert mock_archive.call_args.args[1] == "unknown-sender"
+        mock_db.log_event.assert_called_once()
+
+    def test_skips_user_whose_timer_has_not_run_since_switching(self):
+        from datetime import datetime, timezone
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.server.db") as mock_db, \
+                 patch("claven.server.auth"), \
+                 patch("claven.routes.internal.archive_expired_unknown") as mock_archive:
+                _fake_db_ctx(mock_db)
+                mock_db.get_sunset_users.return_value = [
+                    {"user_id": "uid-1", "sunset_hours": 24, "changed_at": datetime.now(timezone.utc)},
+                ]
+                mock_db.get_history_id.return_value = 99
+                with TestClient(app) as client:
+                    response = client.post("/internal/sunset", headers=self._AUTH)
+        assert response.status_code == 200
+        mock_archive.assert_not_called()

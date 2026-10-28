@@ -686,3 +686,54 @@ describe("Dashboard page", () => {
     });
   });
 });
+
+describe("Inbox mode", () => {
+  const FILTER_CONFIG = {
+    labels: [{
+      id: "known-sender",
+      name: "Known Sender",
+      unknown_label: "unknown-sender",
+      rules: [{ field: "from", known_sender: true }],
+    }],
+  };
+
+  function modeCalls() {
+    return (fetch as ReturnType<typeof vi.fn>).mock.calls.filter(([url]) => String(url).includes("/api/settings/inbox-mode"));
+  }
+
+  it("shows the three modes with the current one selected", async () => {
+    mockFetch({ ok: true, body: { ...DEFAULT_ME, inbox_mode: "gatekeeper", sunset_hours: 24 } }, FILTER_CONFIG);
+    render(<DashboardPage />);
+    const gate = await screen.findByRole("button", { name: "Gatekeeper" });
+    expect(gate).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Sunset" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "Label only" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("hides the timer unless Sunset is selected", async () => {
+    mockFetch({ ok: true, body: { ...DEFAULT_ME, inbox_mode: "gatekeeper", sunset_hours: 24 } }, FILTER_CONFIG);
+    render(<DashboardPage />);
+    await screen.findByRole("button", { name: "Gatekeeper" });
+    expect(screen.queryByLabelText(/sunset timer/i)).not.toBeInTheDocument();
+  });
+
+  it("selecting Sunset posts the new mode", async () => {
+    mockFetch({ ok: true, body: { ...DEFAULT_ME, inbox_mode: "gatekeeper", sunset_hours: 24 } }, FILTER_CONFIG);
+    render(<DashboardPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Sunset" }));
+    await waitFor(() => expect(modeCalls()).toHaveLength(1));
+    const [, init] = modeCalls()[0];
+    expect(JSON.parse(init.body)).toEqual({ mode: "sunset" });
+  });
+
+  it("changing the Sunset timer posts the hours", async () => {
+    mockFetch({ ok: true, body: { ...DEFAULT_ME, inbox_mode: "sunset", sunset_hours: 24 } }, FILTER_CONFIG);
+    render(<DashboardPage />);
+    const timer = await screen.findByLabelText(/sunset timer/i);
+    expect(timer).toHaveValue("24");
+    await userEvent.selectOptions(timer, "72");
+    await waitFor(() => expect(modeCalls()).toHaveLength(1));
+    const [, init] = modeCalls()[0];
+    expect(JSON.parse(init.body)).toEqual({ mode: "sunset", sunset_hours: 72 });
+  });
+});

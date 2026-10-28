@@ -40,7 +40,8 @@ def api_me(request: Request):
         last_labeled_at = _srv.db.get_last_labeled_at(conn, session["user_id"])
         last_fetched_at = _srv.db.get_last_fetched_at(conn, session["user_id"])
         scan_scope = _srv.db.get_scan_scope(conn, session["user_id"])
-        auto_archive_unknown = _srv.db.get_auto_archive_unknown(conn, session["user_id"])
+        inbox_mode = _srv.db.get_inbox_mode(conn, session["user_id"])
+        auto_archive_unknown = inbox_mode["mode"] == "gatekeeper"
 
         unread_count = None
         read_count = None
@@ -347,6 +348,8 @@ def api_me(request: Request):
         "recent_events": recent_events,
         "scan_scope": scan_scope,
         "auto_archive_unknown": auto_archive_unknown,
+        "inbox_mode": inbox_mode["mode"],
+        "sunset_hours": inbox_mode["sunset_hours"],
         "cancel_state": cancel_state,
         "unread_count": unread_count,
         "read_count": read_count,
@@ -554,6 +557,35 @@ async def api_set_auto_archive(request: Request):
         _srv.db.set_auto_archive_unknown(conn, session["user_id"], enabled)
         _srv.db.log_event(conn, session["user_id"], "setting", f"Auto-archive unknown-sender {'enabled' if enabled else 'disabled'}")
     return JSONResponse({"ok": True, "auto_archive_unknown": enabled})
+
+
+_INBOX_MODE_NAMES = {"label_only": "Label only", "gatekeeper": "Gatekeeper", "sunset": "Sunset"}
+
+
+@router.post("/api/settings/inbox-mode")
+async def api_set_inbox_mode(request: Request):
+    """Pick what happens to unknown-sender mail: label_only, gatekeeper, or sunset.
+
+    sunset_hours (optional) sets the Sunset timer; omitted keeps the current one.
+    """
+    from claven.core.sunset import INBOX_MODES, SUNSET_HOURS_CHOICES
+
+    session = _get_session(request)
+    body = await request.json()
+    mode = body.get("mode")
+    sunset_hours = body.get("sunset_hours")
+    if mode not in INBOX_MODES:
+        logger.debug("api_set_inbox_mode: invalid mode %r", mode)
+        raise HTTPException(status_code=400, detail=f"mode must be one of {', '.join(INBOX_MODES)}")
+    if sunset_hours is not None and sunset_hours not in SUNSET_HOURS_CHOICES:
+        logger.debug("api_set_inbox_mode: invalid sunset_hours %r", sunset_hours)
+        raise HTTPException(status_code=400, detail=f"sunset_hours must be one of {SUNSET_HOURS_CHOICES}")
+    with _srv.db.get_connection() as conn:
+        _srv.db.set_inbox_mode(conn, session["user_id"], mode, sunset_hours=sunset_hours)
+        detail = f" ({sunset_hours}h)" if mode == "sunset" and sunset_hours else ""
+        _srv.db.log_event(conn, session["user_id"], "setting", f"Inbox mode set to {_INBOX_MODE_NAMES[mode]}{detail}")
+    logger.debug("api_set_inbox_mode: %s → %s hours=%s", session["user_id"], mode, sunset_hours)
+    return JSONResponse({"ok": True, "inbox_mode": mode, "sunset_hours": sunset_hours})
 
 
 @router.get("/api/top-senders")

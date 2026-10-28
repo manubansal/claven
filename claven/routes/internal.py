@@ -1,13 +1,15 @@
-"""Internal + webhook routes (/internal/poll, /internal/renew-watches, /internal/build-known-senders, /webhook/gmail)."""
+"""Internal + webhook routes (/internal/poll, /internal/renew-watches, /internal/build-known-senders, /internal/sunset, /webhook/gmail)."""
 
 import base64
 import json
 import logging
 import os
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 
 import claven.server as _srv
+from claven.core.sunset import archive_expired_unknown, sunset_cutoff
 from claven.routes.auth import _require_internal_auth, _verify_pubsub_token
 
 logger = logging.getLogger(__name__)
@@ -138,6 +140,53 @@ def internal_build_known_senders(request: Request):
                 results.append({"user_id": user_id, "status": "error", "detail": error_label})
 
     return {"processed": len(results), "results": results}
+
+
+@router.post("/internal/sunset")
+def internal_sunset(request: Request):
+    """Archive expired unknown-sender mail for users in Sunset mode.
+
+    Unread, unstarred unknown-sender inbox mail older than the user's timer is
+    archived. Idempotent. Intended to be triggered every 15 minutes by Cloud
+    Scheduler.
+    """
+    _require_internal_auth(request)
+    now = datetime.now(timezone.utc)
+    label_configs = _srv.load_config().get("labels", [])
+    unknown_label = label_configs[0].get("unknown_label", "unknown-sender") if label_configs else "unknown-sender"
+    archived_total = 0
+    results = []
+
+    with _srv.db.get_connection() as conn:
+        users = _srv.db.get_sunset_users(conn)
+
+    for user in users:
+        user_id = user["user_id"]
+        cutoff = sunset_cutoff(now, user["sunset_hours"], user["changed_at"])
+        if cutoff is None:
+            logger.debug("sunset: skipping %s (timer not yet run since switching)", user_id)
+            continue
+        with _srv.db.get_connection() as conn:
+            try:
+                if not _srv.db.get_history_id(conn, user_id):
+                    logger.debug("sunset: skipping %s (not connected)", user_id)
+                    continue
+                service = _srv.auth.get_service(conn, user_id, os.environ["TOKEN_ENCRYPTION_KEY"])
+                archived = archive_expired_unknown(service, unknown_label, cutoff)
+                if archived:
+                    logger.debug("sunset: %s archived %d", user_id, archived)
+                    _srv.db.log_event(conn, user_id, "sunset_archived",
+                                      f"Sunset archived {archived} unread unknown-sender message{'s' if archived != 1 else ''}")
+                else:
+                    logger.debug("sunset: %s nothing expired", user_id)
+                archived_total += archived
+                results.append({"user_id": user_id, "status": "ok", "archived": archived})
+            except Exception as exc:
+                from claven.tasks import _handle_error
+                _handle_error(exc, user_id, "Sunset", conn)
+                results.append({"user_id": user_id, "status": "error", "detail": str(exc)})
+
+    return {"archived": archived_total, "results": results}
 
 
 @router.post("/webhook/gmail")

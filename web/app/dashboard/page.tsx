@@ -45,9 +45,26 @@ type MeResponse = {
   reset_sent_job: { job_id: string; status: string; total: number | null; progress: number | null } | null;
   scan_scope: "inbox" | "allmail" | null;
   auto_archive_unknown: boolean;
+  inbox_mode?: InboxMode;
+  sunset_hours?: number;
   cancel_state: string | null;
   gmail_error: { code: string; label: string; severity: string } | null;
 };
+
+type InboxMode = "label_only" | "gatekeeper" | "sunset";
+
+const INBOX_MODES: { value: InboxMode; label: string; hint: string }[] = [
+  { value: "label_only", label: "Label only", hint: "Label mail; never archive anything" },
+  { value: "gatekeeper", label: "Gatekeeper", hint: "Archive unknown-sender mail as soon as it arrives" },
+  { value: "sunset", label: "Sunset", hint: "Unknown-sender mail stays in the inbox; archived after the timer unless read or starred" },
+];
+
+const SUNSET_HOURS: { value: number; label: string }[] = [
+  { value: 4, label: "4h" },
+  { value: 12, label: "12h" },
+  { value: 24, label: "24h" },
+  { value: 72, label: "3 days" },
+];
 
 type LabelRule = {
   field: string;
@@ -357,17 +374,25 @@ export default function DashboardPage() {
       .catch(() => loadData());
   }
 
-  function handleAutoArchive(enabled: boolean) {
+  function handleInboxMode(mode: InboxMode, sunsetHours?: number) {
     setState((prev) =>
       prev.status === "loaded"
-        ? { ...prev, data: { ...prev.data, auto_archive_unknown: enabled } }
+        ? {
+            ...prev,
+            data: {
+              ...prev.data,
+              inbox_mode: mode,
+              auto_archive_unknown: mode === "gatekeeper",
+              ...(sunsetHours !== undefined ? { sunset_hours: sunsetHours } : {}),
+            },
+          }
         : prev,
     );
-    fetch(`${API_URL}/api/settings/auto-archive`, {
+    fetch(`${API_URL}/api/settings/inbox-mode`, {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled }),
+      body: JSON.stringify(sunsetHours !== undefined ? { mode, sunset_hours: sunsetHours } : { mode }),
     })
       .then(() => { loadData(); })
       .catch(() => loadData());
@@ -579,6 +604,8 @@ export default function DashboardPage() {
                         : severity === "warning" ? "filter-warning-icon"
                         : severity === "success" ? "filter-complete-icon"
                         : "filter-waiting-icon";
+                      const inboxMode: InboxMode = state.data.inbox_mode
+                        ?? (state.data.auto_archive_unknown ? "gatekeeper" : "label_only");
                       const unknownCountLabel = (
                         <>
                           Inbox unknown-sender
@@ -603,7 +630,7 @@ export default function DashboardPage() {
                             title="Inbox scan"
                             errorCode={inboxErrorCode}
                             action={
-                              <div className="flex gap-2">
+                              <div className="flex flex-wrap justify-end gap-2">
                                 <div className="flex rounded-md border border-border/50 overflow-hidden text-[10px] text-muted-foreground w-36">
                                   <button onClick={() => handleScanScope("inbox")}
                                     className={cn("flex-1 px-3 py-0.5 transition-colors text-center",
@@ -616,16 +643,29 @@ export default function DashboardPage() {
                                     All mail
                                   </button>
                                 </div>
-                                <button
-                                  onClick={() => handleAutoArchive(!state.data.auto_archive_unknown)}
-                                  className={cn("text-[10px] px-2 py-0.5 rounded-full border transition-colors",
-                                    state.data.auto_archive_unknown
-                                      ? "border-primary bg-muted font-medium text-foreground"
-                                      : "border-border/50 text-muted-foreground hover:text-foreground"
-                                  )}
-                                >
-                                  Auto-archive
-                                </button>
+                                <div className="flex rounded-md border border-border/50 overflow-hidden text-[10px] text-muted-foreground">
+                                  {INBOX_MODES.map((m, i) => {
+                                    const active = inboxMode === m.value;
+                                    return (
+                                      <button key={m.value} title={m.hint} aria-pressed={active}
+                                        onClick={() => { if (!active) handleInboxMode(m.value); }}
+                                        className={cn("px-2 py-0.5 transition-colors text-center whitespace-nowrap",
+                                          i > 0 && "border-l border-border/50",
+                                          active ? "bg-muted font-medium text-foreground" : "hover:text-foreground")}>
+                                        {m.label}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                                {inboxMode === "sunset" && (
+                                  <select aria-label="Sunset timer" value={String(state.data.sunset_hours ?? 24)}
+                                    onChange={(e) => handleInboxMode("sunset", Number(e.target.value))}
+                                    className="text-[10px] rounded-md border border-border/50 bg-background px-1 py-0.5 text-muted-foreground">
+                                    {SUNSET_HOURS.map((h) => (
+                                      <option key={h.value} value={h.value}>{h.label}</option>
+                                    ))}
+                                  </select>
+                                )}
                               </div>
                             }
                             rows={[

@@ -5,11 +5,14 @@ Transaction management (commit / rollback) is the caller's responsibility;
 use get_connection() for production code or inject a test connection directly.
 """
 
+import logging
 import os
 from contextlib import contextmanager
 
 import psycopg2
 import psycopg2.extras
+
+logger = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -453,23 +456,63 @@ def set_scan_scope(conn, user_id: str, scope: str) -> None:
         )
 
 
-# ── Auto-archive setting ─────────────────────────────────────────────────────
+# ── Inbox mode (label_only / gatekeeper / sunset) ──────────────────────────
+
+def get_inbox_mode(conn, user_id: str) -> dict:
+    """Return {mode, sunset_hours, changed_at}. No scan_state row → label_only."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT inbox_mode, sunset_hours, inbox_mode_changed_at FROM scan_state WHERE user_id = %s",
+            (user_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        logger.debug("get_inbox_mode: no scan_state for %s, defaulting to label_only", user_id)
+        return {"mode": "label_only", "sunset_hours": 24, "changed_at": None}
+    logger.debug("get_inbox_mode: %s mode=%s hours=%s", user_id, row[0], row[1])
+    return {"mode": row[0], "sunset_hours": row[1], "changed_at": row[2]}
+
+
+def set_inbox_mode(conn, user_id: str, mode: str, sunset_hours: int | None = None) -> None:
+    """Set inbox_mode (and optionally the Sunset timer).
+
+    inbox_mode_changed_at moves only when the mode actually changes, so
+    adjusting the timer does not restart it. auto_archive_unknown is kept in
+    sync for rollback compatibility.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE scan_state SET
+                inbox_mode_changed_at = CASE WHEN inbox_mode IS DISTINCT FROM %(mode)s
+                                             THEN NOW() ELSE inbox_mode_changed_at END,
+                inbox_mode = %(mode)s,
+                sunset_hours = COALESCE(%(hours)s, sunset_hours),
+                auto_archive_unknown = (%(mode)s = 'gatekeeper'),
+                updated_at = NOW()
+            WHERE user_id = %(user_id)s
+            """,
+            {"mode": mode, "hours": sunset_hours, "user_id": user_id},
+        )
+
+
+def get_sunset_users(conn) -> list[dict]:
+    """Return [{user_id, sunset_hours, changed_at}] for users in Sunset mode."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT user_id::text, sunset_hours, inbox_mode_changed_at FROM scan_state WHERE inbox_mode = 'sunset'"
+        )
+        return [{"user_id": r[0], "sunset_hours": r[1], "changed_at": r[2]} for r in cur.fetchall()]
+
 
 def get_auto_archive_unknown(conn, user_id: str) -> bool:
-    """Return auto_archive_unknown setting. Defaults to False."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT auto_archive_unknown FROM scan_state WHERE user_id = %s", (user_id,))
-        row = cur.fetchone()
-        return bool(row[0]) if row else False
+    """True when unknown-sender mail is archived immediately (Gatekeeper mode)."""
+    return get_inbox_mode(conn, user_id)["mode"] == "gatekeeper"
 
 
 def set_auto_archive_unknown(conn, user_id: str, enabled: bool) -> None:
-    """Set auto_archive_unknown setting."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE scan_state SET auto_archive_unknown = %s, updated_at = NOW() WHERE user_id = %s",
-            (enabled, user_id),
-        )
+    """Legacy on/off setting: on = Gatekeeper, off = Label only."""
+    set_inbox_mode(conn, user_id, "gatekeeper" if enabled else "label_only")
 
 
 # ── Event log ─────────────────────────────────────────────────────────────────
