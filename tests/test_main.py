@@ -415,14 +415,14 @@ class TestSunsetCountdownOnArrival:
         mock_apply = self._process(["INBOX", "UNREAD", "id-c/12h"])
         mock_apply.assert_not_called()
 
-    def test_three_day_timer_starts_at_3d_step(self):
+    def test_three_day_timer_starts_at_72h(self):
         mock_apply = self._process(["INBOX", "UNREAD"], sunset=self._sunset(hours=72))
-        mock_apply.assert_called_once_with(ANY, "m1", "id-c/3d")
+        mock_apply.assert_called_once_with(ANY, "m1", "id-c/72h")
 
     def test_late_processed_mail_gets_step_for_actual_time_left(self):
         # Arrived 21h ago (e.g. push missed, picked up by the poll): 3h left.
         mock_apply = self._process(["INBOX", "UNREAD"], arrived_ago_min=21 * 60)
-        mock_apply.assert_called_once_with(ANY, "m1", "id-c/4h")
+        mock_apply.assert_called_once_with(ANY, "m1", "id-c/3h")
 
     @pytest.mark.parametrize("labels", [["INBOX"], ["INBOX", "UNREAD", "STARRED"], ["UNREAD"]])
     def test_read_starred_or_archived_mail_gets_no_countdown(self, labels):

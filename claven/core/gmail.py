@@ -7,7 +7,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from claven.core.labels import LEGACY_NAMES, RETIRED_NAMES, label_body
+from claven.core.labels import COUNTDOWN_LABELS, COUNTDOWN_LIST_VISIBILITY, LEGACY_NAMES, RETIRED_NAMES, label_body
 
 logger = logging.getLogger(__name__)
 
@@ -167,8 +167,9 @@ def migrate_legacy_labels(service, labels: list[dict]) -> list[dict]:
     and delete labels Claven no longer uses.
 
     Renaming keeps the label on every message, so nothing has to be relabeled.
-    A label is left alone if its new name is already taken. Returns the label
-    list with the renames applied.
+    A label is left alone if its new name is already taken. Countdown labels
+    created before hourly steps are switched to show in the sidebar only while
+    unread. Returns the label list with the renames applied.
     """
     labels = list(labels)
     for label in [l for l in labels if l["name"] in RETIRED_NAMES]:
@@ -194,9 +195,20 @@ def migrate_legacy_labels(service, labels: list[dict]) -> list[dict]:
         _style_label(service, new_name,
                      lambda b, lid=label["id"]: service.users().labels().patch(userId="me", id=lid, body=b))
         logger.info("Renamed Gmail label %s to %s (id: %s)", label["name"], new_name, label["id"])
-        labels[labels.index(label)] = {**label, "name": new_name}
+        renamed = {**label, "name": new_name}
+        if new_name in COUNTDOWN_LABELS:
+            logger.debug("migrate_legacy_labels: %s styled as a countdown", new_name)
+            renamed["labelListVisibility"] = COUNTDOWN_LIST_VISIBILITY
+        labels[labels.index(label)] = renamed
         names.discard(label["name"])
         names.add(new_name)
+    for i, label in enumerate(labels):
+        if label["name"] not in COUNTDOWN_LABELS or label.get("labelListVisibility") == COUNTDOWN_LIST_VISIBILITY:
+            continue
+        logger.info("Gmail label %s now listed only while it has unread mail", label["name"])
+        body = {"labelListVisibility": COUNTDOWN_LIST_VISIBILITY}
+        gmail_retry(lambda lid=label["id"], b=body: service.users().labels().patch(userId="me", id=lid, body=b).execute())
+        labels[i] = {**label, **body}
     return labels
 
 

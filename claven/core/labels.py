@@ -2,8 +2,9 @@
 
 c/k   known sender (green)
 c/u   unknown sender (grey)
-c/3d … c/1h   Sunset countdown ("gone within"), in place of c/u while mail waits;
-              calm to urgent: blue, yellow, orange, red
+c/72h … c/1h  Sunset countdown, hourly ("gone within"), in place of c/u while mail
+              waits; calm to urgent: blue, yellow, orange, red; listed in the
+              sidebar only while they have unread mail
 c/s   sent mail already scanned for known senders (hidden)
 """
 
@@ -11,6 +12,9 @@ PARENT = "c"
 KNOWN = "c/k"
 UNKNOWN = "c/u"
 SENT_SCANNED = "c/s"
+# One countdown label per hour of the longest Sunset timer, longest first.
+COUNTDOWN_MAX_HOURS = 72
+COUNTDOWN_LABELS = tuple(f"c/{hours}h" for hours in range(COUNTDOWN_MAX_HOURS, 0, -1))
 
 # Gmail accepts label colours only from this fixed palette.
 GMAIL_LABEL_COLORS = frozenset("""
@@ -34,16 +38,25 @@ def _color(background: str, text: str) -> dict:
     return {"backgroundColor": background, "textColor": text}
 
 
-_CALM = _color("#c9daf8", "#1c4587")
+def _countdown_color(hours: int) -> dict:
+    """Calm to urgent: blue over 12h, yellow to 5h, orange to 2h, red in the last hour."""
+    if hours > 12:
+        return _color("#c9daf8", "#1c4587")
+    if hours > 4:
+        return _color("#fad165", "#000000")
+    if hours > 1:
+        return _color("#ffad47", "#000000")
+    return _color("#fb4c2f", "#ffffff")
+
+
 LABEL_COLORS = {
     KNOWN: _color("#16a766", "#ffffff"),
     UNKNOWN: _color("#e7e7e7", "#464646"),
-    "c/3d": _CALM,
-    "c/24h": _CALM,
-    "c/12h": _color("#fad165", "#000000"),
-    "c/4h": _color("#ffad47", "#000000"),
-    "c/1h": _color("#fb4c2f", "#ffffff"),
+    **{f"c/{hours}h": _countdown_color(hours) for hours in range(COUNTDOWN_MAX_HOURS, 0, -1)},
 }
+
+# Up to 72 countdown labels: list only those with unread mail in the sidebar.
+COUNTDOWN_LIST_VISIBILITY = "labelShowIfUnread"
 
 # Names used by earlier Claven versions. Renaming in place keeps the label on
 # every message that already has it.
@@ -51,7 +64,8 @@ LEGACY_NAMES = {
     "known-sender": KNOWN,
     "unknown-sender": UNKNOWN,
     "claven/sent-scanned": SENT_SCANNED,
-    "sunset/3d left": "c/3d",
+    "sunset/3d left": "c/72h",
+    "c/3d": "c/72h",
     "sunset/24h left": "c/24h",
     "sunset/12h left": "c/12h",
     "sunset/4h left": "c/4h",
@@ -70,6 +84,8 @@ def label_body(name: str) -> dict:
         body.update(labelListVisibility="labelHide", messageListVisibility="hide")
     elif name == PARENT:
         body["messageListVisibility"] = "hide"
+    elif name in COUNTDOWN_LABELS:
+        body["labelListVisibility"] = COUNTDOWN_LIST_VISIBILITY
     if name in LABEL_COLORS:
         body["color"] = LABEL_COLORS[name]
     return body

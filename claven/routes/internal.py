@@ -12,9 +12,10 @@ import claven.server as _srv
 from claven.core.gmail import build_label_id_cache
 from claven.core.labels import UNKNOWN
 from claven.core.sunset import (
-    COUNTDOWN_LABELS,
     archive_expired_unknown,
     clear_countdowns,
+    countdown_labels_for,
+    existing_countdown_ids,
     sunset_cutoff,
     update_countdowns,
 )
@@ -196,19 +197,21 @@ def internal_sunset(request: Request):
                     continue
                 service = _srv.auth.get_service(conn, user_id, os.environ["TOKEN_ENCRYPTION_KEY"])
                 # Builds (and renames old) labels before any search by label name.
-                label_ids = build_label_id_cache(service, [unknown_label, *COUNTDOWN_LABELS])
+                needed = countdown_labels_for(user["sunset_hours"])
+                label_ids = build_label_id_cache(service, [unknown_label, *needed])
+                # Labels for hours beyond the timer may still be on mail from a longer timer.
+                countdown_ids = {**existing_countdown_ids(service), **{name: label_ids[name] for name in needed}}
                 archived = 0
                 if cutoff is None:
                     logger.debug("sunset: %s timer not yet run since switching, nothing to archive", user_id)
                 else:
-                    archived = archive_expired_unknown(service, unknown_label, cutoff)
+                    archived = archive_expired_unknown(service, unknown_label, cutoff, list(countdown_ids))
                 if archived:
                     logger.debug("sunset: %s archived %d", user_id, archived)
                     _srv.db.log_event(conn, user_id, "sunset_archived",
                                       f"Sunset archived {archived} unread unknown-sender message{'s' if archived != 1 else ''}")
                 else:
                     logger.debug("sunset: %s nothing archived", user_id)
-                countdown_ids = {name: label_ids[name] for name in COUNTDOWN_LABELS}
                 update_countdowns(service, unknown_label, label_ids[unknown_label], now,
                                   user["sunset_hours"], user["changed_at"], countdown_ids)
                 _srv.db.set_sunset_countdown_active(conn, user_id, True)

@@ -1112,21 +1112,20 @@ class TestApiMe:
 
         messages_api = svc.users.return_value.messages.return_value
         base_list = messages_api.list.side_effect
-        queries = []
+        calls = []
 
         def _list(**kwargs):
-            queries.append(kwargs.get("q", ""))
-            if kwargs.get("labelIds") == ["INBOX", "Label_c4h"]:
-                result = MagicMock()
-                result.execute.return_value = {"messages": [{"id": "w1"}, {"id": "w2"}]}
-                return result
+            calls.append(kwargs)
             return base_list(**kwargs)
         messages_api.list.side_effect = _list
 
         body = self._get_me(svc).json()
         assert body["allmail_labeled_unknown_count"] == 45
-        assert body["inbox_labeled_unknown_shallow_count"] == 2
-        assert any(q.startswith("in:inbox") and "-label:c/4h" in q for q in queries)
+        # Countdown labels sit only on mail waiting in the inbox, so their totals are inbox counts.
+        assert body["inbox_labeled_unknown_shallow_count"] == 5
+        assert any(c.get("q", "").startswith("in:inbox") and "-label:c/4h" in c["q"] for c in calls)
+        # Up to 72 countdown labels: no per-label inbox listing.
+        assert not any(c.get("labelIds") == ["INBOX", "Label_c4h"] for c in calls)
 
     def test_renames_old_label_names_and_keeps_counts(self):
         from claven.core.labels import label_body
@@ -2310,6 +2309,7 @@ class TestInternalSunset:
             with patch("claven.server.db") as mock_db, \
                  patch("claven.server.auth") as mock_auth, \
                  patch("claven.routes.internal.archive_expired_unknown", return_value=2) as mock_archive, \
+                 patch("claven.routes.internal.existing_countdown_ids", return_value={"c/40h": "old-40"}), \
                  patch("claven.routes.internal.build_label_id_cache", side_effect=lambda svc, names: {n: f"id-{n}" for n in names}), \
                  patch("claven.routes.internal.update_countdowns") as mock_countdowns:
                 _fake_db_ctx(mock_db)
@@ -2329,6 +2329,9 @@ class TestInternalSunset:
         mock_countdowns.assert_called_once()
         # Countdowns replace c/u while mail waits, so the sweep needs its id to swap back.
         assert mock_countdowns.call_args.args[1:3] == ("c/u", "id-c/u")
+        # Hourly labels for the 24h timer, plus any left over from a longer timer.
+        assert mock_countdowns.call_args.args[-1] == {"c/40h": "old-40", **{f"c/{h}h": f"id-c/{h}h" for h in range(24, 0, -1)}}
+        assert mock_archive.call_args.args[3] == ["c/40h", *(f"c/{h}h" for h in range(24, 0, -1))]
         mock_db.set_sunset_countdown_active.assert_called_once_with(ANY, "uid-1", True)
 
     def test_renames_old_labels_before_archiving(self):
@@ -2340,6 +2343,7 @@ class TestInternalSunset:
             with patch("claven.server.db") as mock_db, \
                  patch("claven.server.auth"), \
                  patch("claven.routes.internal.archive_expired_unknown", return_value=0) as mock_archive, \
+                 patch("claven.routes.internal.existing_countdown_ids", return_value={}), \
                  patch("claven.routes.internal.build_label_id_cache", side_effect=lambda svc, names: {n: f"id-{n}" for n in names}) as mock_cache, \
                  patch("claven.routes.internal.update_countdowns"):
                 order.attach_mock(mock_cache, "cache")
@@ -2362,6 +2366,7 @@ class TestInternalSunset:
             with patch("claven.server.db") as mock_db, \
                  patch("claven.server.auth"), \
                  patch("claven.routes.internal.archive_expired_unknown") as mock_archive, \
+                 patch("claven.routes.internal.existing_countdown_ids", return_value={}), \
                  patch("claven.routes.internal.build_label_id_cache", side_effect=lambda svc, names: {n: f"id-{n}" for n in names}), \
                  patch("claven.routes.internal.update_countdowns") as mock_countdowns:
                 _fake_db_ctx(mock_db)
@@ -2400,7 +2405,7 @@ class TestSunsetForLiveLabeling:
 
     def test_sunset_user_gets_timer_and_countdown_ids(self):
         from datetime import datetime, timezone
-        from claven.core.sunset import COUNTDOWN_LABELS
+        from claven.core.sunset import countdown_labels_for
         from claven.tasks import _sunset_for_live_labeling
         changed = datetime(2026, 10, 27, tzinfo=timezone.utc)
         conn = MagicMock()
@@ -2409,9 +2414,10 @@ class TestSunsetForLiveLabeling:
                    side_effect=lambda svc, names: {n: f"id-{n}" for n in names}) as mock_cache:
             mock_db.get_inbox_mode.return_value = {"mode": "sunset", "sunset_hours": 12, "changed_at": changed}
             sunset = _sunset_for_live_labeling(MagicMock(), conn, "uid-1")
+        # Only the hours up to the user's timer are created.
         assert sunset == {"hours": 12, "changed_at": changed,
-                          "label_ids": {n: f"id-{n}" for n in COUNTDOWN_LABELS}}
-        assert list(mock_cache.call_args.args[1]) == list(COUNTDOWN_LABELS)
+                          "label_ids": {n: f"id-{n}" for n in countdown_labels_for(12)}}
+        assert list(mock_cache.call_args.args[1]) == list(countdown_labels_for(12))
         # Countdown labels may now exist, so leaving Sunset must clean them up.
         mock_db.set_sunset_countdown_active.assert_called_once_with(conn, "uid-1", True)
 
