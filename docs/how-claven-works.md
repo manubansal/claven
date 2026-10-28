@@ -190,7 +190,7 @@ The action shows progress as it works through your messages and can be cancelled
 
 Labels are applied once and not automatically reconsidered. There are cases where a message could have the wrong label:
 
-- **You email someone after their message was labeled**: Their inbox message was labeled `c/u` before you replied. After you reply, they become a known sender, but the existing label isn't updated. A future relabel (removing all labels and rescanning) will fix this.
+- **You email someone after their message was labeled**: Their message was labeled `c/u` (or a Sunset countdown) before you replied. As soon as Claven sees your reply, they become a known sender and their earlier messages are switched to `c/k`. Until then, a thread can show both `c/k` and `c/u`, because Gmail shows every label from every message in a conversation.
 
 - **Multiple workers scanning simultaneously**: This was a bug that has been fixed. The sent scan now always completes before the inbox scan starts, ensuring the known senders list is complete.
 

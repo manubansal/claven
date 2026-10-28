@@ -688,6 +688,22 @@ class TestMigrateLegacyLabels:
 
 
 class TestRetiredLabels:
+    def test_sent_scanned_label_is_hidden_again(self):
+        # c/s marks scanned sent mail; it must never show on threads you replied to.
+        from claven.core.gmail import migrate_legacy_labels
+        service = mock_service()
+        labels = [{"id": "LS", "name": "c/s", "labelListVisibility": "labelShow", "messageListVisibility": "show"}]
+        migrate_legacy_labels(service, labels)
+        service.users().labels().patch.assert_called_once_with(
+            userId="me", id="LS", body={"labelListVisibility": "labelHide", "messageListVisibility": "hide"})
+
+    def test_hidden_sent_scanned_label_is_left_alone(self):
+        from claven.core.gmail import migrate_legacy_labels
+        service = mock_service()
+        labels = [{"id": "LS", "name": "c/s", "labelListVisibility": "labelHide", "messageListVisibility": "hide"}]
+        migrate_legacy_labels(service, labels)
+        service.users().labels().patch.assert_not_called()
+
     def test_countdown_labels_switch_to_show_if_unread(self):
         from claven.core.gmail import migrate_legacy_labels
         service = mock_service()

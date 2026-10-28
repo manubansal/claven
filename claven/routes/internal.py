@@ -299,6 +299,17 @@ async def webhook_gmail(request: Request):
             if count is not None and count > 0:
                 _srv.db.increment_processed_count(conn, user["id"], count)
                 _srv.db.touch_last_labeled(conn, user["id"])
+            # Mail you just sent made its recipients known: move their earlier
+            # unknown-sender mail to known now rather than on the next dashboard
+            # visit. Runs after new mail is labeled so a failure can't hold that up;
+            # senders stay pending and are retried on the next webhook or visit.
+            if _srv.db.get_pending_relabel_senders(conn, user["id"]):
+                logger.debug("webhook_gmail: relabeling newly known senders for %s", email)
+                _srv.relabel_scan(service, user["id"], label_configs, label_id_cache,
+                                  shutdown_event=_srv._shutdown_event,
+                                  countdown_ids=existing_countdown_ids(service))
+            else:
+                logger.debug("webhook_gmail: no newly known senders for %s", email)
         except Exception as exc:
             from claven.tasks import _handle_error
             _handle_error(exc, user["id"], "Webhook", conn)
