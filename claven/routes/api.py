@@ -12,6 +12,7 @@ import claven.server as _srv
 from claven.core.gmail import migrate_legacy_labels
 from claven.core.health import HEALTH_CODES
 from claven.core.labels import KNOWN, LEGACY_NAMES
+from claven.core.sunset import COUNTDOWN_LABELS
 from claven.routes.auth import _get_session
 
 logger = logging.getLogger(__name__)
@@ -97,6 +98,9 @@ def api_me(request: Request):
             else:
                 logger.debug("api_me: labels already current")
             label_id_by_name = {l["name"]: l["id"] for l in all_gmail_labels}
+            # In Sunset, waiting unknown-sender mail carries a countdown label instead of the unknown label.
+            countdown_names = [n for n in COUNTDOWN_LABELS if n in label_id_by_name]
+            countdown_ids = [label_id_by_name[n] for n in countdown_names]
 
             newest_msgs = b1.get("newest_msg", {}).get("messages", [])
 
@@ -118,6 +122,8 @@ def api_me(request: Request):
                     batch2.add(service.users().labels().get(userId="me", id=lid), request_id=f"known_{lc['id']}")
                 if (unknown := lc.get("unknown_label")) and (uid := label_id_by_name.get(unknown)):
                     batch2.add(service.users().labels().get(userId="me", id=uid), request_id=f"unknown_{unknown}")
+            for cid in countdown_ids:
+                batch2.add(service.users().labels().get(userId="me", id=cid), request_id=f"countdown_{cid}")
 
             if newest_msgs:
                 batch2.add(service.users().messages().get(userId="me", id=newest_msgs[0]["id"], format="minimal"), request_id="newest_detail")
@@ -130,11 +136,13 @@ def api_me(request: Request):
                     batch2.add(service.users().messages().list(userId="me", labelIds=[lid], maxResults=1), request_id=f"newest_known_{lc['id']}")
                 if (unknown := lc.get("unknown_label")) and (uid := label_id_by_name.get(unknown)):
                     batch2.add(service.users().messages().list(userId="me", labelIds=[uid], maxResults=1), request_id=f"newest_unknown_{unknown}")
+            for cid in countdown_ids:
+                batch2.add(service.users().messages().list(userId="me", labelIds=[cid], maxResults=1), request_id=f"newest_countdown_{cid}")
 
             # Always query both inbox and allmail unlabeled counts.
             # Inbox unlabeled for display; allmail unlabeled for display + retrigger (when scope=allmail).
-            inbox_unlabeled_q = _unlabeled_query(label_configs, scope="inbox")
-            allmail_unlabeled_q = _unlabeled_query(label_configs, scope="allmail")
+            inbox_unlabeled_q = _unlabeled_query(label_configs, scope="inbox", countdown_labels=countdown_names)
+            allmail_unlabeled_q = _unlabeled_query(label_configs, scope="allmail", countdown_labels=countdown_names)
             batch2.add(service.users().messages().list(userId="me", q=inbox_unlabeled_q, maxResults=500), request_id="unlabeled")
             batch2.add(service.users().messages().list(userId="me", q=allmail_unlabeled_q, maxResults=500), request_id="allmail_unlabeled")
 
@@ -144,6 +152,8 @@ def api_me(request: Request):
                     batch2.add(service.users().messages().list(userId="me", labelIds=["INBOX", lid], maxResults=500), request_id="inbox_known_shallow")
                 if (unknown := lc.get("unknown_label")) and (uid := label_id_by_name.get(unknown)):
                     batch2.add(service.users().messages().list(userId="me", labelIds=["INBOX", uid], maxResults=500), request_id="inbox_unknown_shallow")
+            for cid in countdown_ids:
+                batch2.add(service.users().messages().list(userId="me", labelIds=["INBOX", cid], maxResults=500), request_id=f"inbox_countdown_shallow_{cid}")
 
             batch2.execute()
 
@@ -156,6 +166,8 @@ def api_me(request: Request):
                 allmail_labeled_known_count += b2.get(f"known_{lc['id']}", {}).get("messagesTotal", 0)
                 if unknown := lc.get("unknown_label"):
                     allmail_labeled_unknown_count += b2.get(f"unknown_{unknown}", {}).get("messagesTotal", 0)
+            for cid in countdown_ids:
+                allmail_labeled_unknown_count += b2.get(f"countdown_{cid}", {}).get("messagesTotal", 0)
             allmail_labeled_total_count = allmail_labeled_known_count + allmail_labeled_unknown_count
 
             inbox_known_data = b2.get("inbox_known_shallow", {})
@@ -167,6 +179,10 @@ def api_me(request: Request):
             inbox_unknown_msgs = inbox_unknown_data.get("messages", [])
             inbox_labeled_unknown_shallow_count = len(inbox_unknown_msgs)
             inbox_labeled_unknown_has_more = "nextPageToken" in inbox_unknown_data
+            for cid in countdown_ids:
+                countdown_data = b2.get(f"inbox_countdown_shallow_{cid}", {})
+                inbox_labeled_unknown_shallow_count += len(countdown_data.get("messages", []))
+                inbox_labeled_unknown_has_more = inbox_labeled_unknown_has_more or "nextPageToken" in countdown_data
 
             newest_detail = b2.get("newest_detail")
             if newest_detail:
@@ -179,7 +195,8 @@ def api_me(request: Request):
             # from each label and pick the one with the highest internalDate.
             labeled_candidate_ids = []
             for lc in label_configs:
-                for key in [f"newest_known_{lc['id']}", f"newest_unknown_{lc.get('unknown_label', '')}"]:
+                for key in [f"newest_known_{lc['id']}", f"newest_unknown_{lc.get('unknown_label', '')}",
+                            *(f"newest_countdown_{cid}" for cid in countdown_ids)]:
                     msgs = b2.get(key, {}).get("messages", [])
                     if msgs:
                         labeled_candidate_ids.append(msgs[0]["id"])

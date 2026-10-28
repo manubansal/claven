@@ -22,6 +22,7 @@ from claven.core.process import process_message
 import time
 
 from claven.core.rules import matches_rule
+from claven.core.sunset import unknown_group
 
 logger = logging.getLogger(__name__)
 
@@ -200,7 +201,8 @@ def build_known_senders(service, conn, user_id, should_continue=None, shutdown_e
     return total_scanned
 
 
-def relabel_scan(service, user_id, label_configs, label_id_cache, should_continue=None, shutdown_event=None):
+def relabel_scan(service, user_id, label_configs, label_id_cache, should_continue=None, shutdown_event=None,
+                 countdown_ids=None):
     """Relabel messages from newly discovered known senders.
 
     Finds senders with relabel_status='pending' in the DB, queries Gmail
@@ -242,8 +244,8 @@ def relabel_scan(service, user_id, label_configs, label_id_cache, should_continu
             logger.debug("relabel_scan: should_continue returned False")
             return total_relabeled
 
-        # Find this sender's messages with unknown-sender label
-        query = f"from:{sender} label:{unknown_label_name}"
+        # Find this sender's unknown-sender messages (in Sunset, waiting ones carry a countdown label)
+        query = f"from:{sender} {unknown_group(unknown_label_name, list(countdown_ids or {}))}"
         msg_ids = []
         page_token = None
         while True:
@@ -261,7 +263,12 @@ def relabel_scan(service, user_id, label_configs, label_id_cache, should_continu
             # Swap labels in batches
             for i in range(0, len(msg_ids), _BATCH_SIZE):
                 batch = msg_ids[i:i + _BATCH_SIZE]
-                swapped = batch_swap_labels(service, batch, unknown_label_id, known_label_id)
+                if countdown_ids:
+                    swapped = batch_swap_labels(service, batch, unknown_label_id, known_label_id,
+                                                also_remove=list(countdown_ids.values()))
+                else:
+                    logger.debug("relabel_scan: no countdown labels to drop")
+                    swapped = batch_swap_labels(service, batch, unknown_label_id, known_label_id)
                 total_relabeled += swapped
                 _interruptible_sleep(1, shutdown_event)
 
@@ -277,22 +284,26 @@ def relabel_scan(service, user_id, label_configs, label_id_cache, should_continu
     return total_relabeled
 
 
-def _unlabeled_query(label_configs, scope="inbox"):
+def _unlabeled_query(label_configs, scope="inbox", countdown_labels=()):
     """Build a Gmail query for messages missing filter labels.
 
     scope='inbox': only inbox messages (default)
     scope='allmail': all messages, no inbox restriction
+    countdown_labels: Sunset countdown labels in the mailbox; mail carrying one
+        is unknown-sender mail already.
     """
     exclude = []
     for lc in label_configs:
         exclude.append(f"-label:{lc['id']}")
         if unknown := lc.get("unknown_label"):
             exclude.append(f"-label:{unknown}")
+    exclude.extend(f"-label:{name}" for name in countdown_labels)
     prefix = "in:inbox " if scope != "allmail" else ""
     return prefix + " ".join(exclude)
 
 
-def scan_inbox(service, conn, user_id, label_configs, label_id_cache, known_senders=None, should_continue=None, shutdown_event=None, scope="inbox", auto_archive_unknown=False):
+def scan_inbox(service, conn, user_id, label_configs, label_id_cache, known_senders=None, should_continue=None, shutdown_event=None, scope="inbox", auto_archive_unknown=False,
+               countdown_labels=()):
     """Label unlabeled messages using batch API calls.
 
     scope='inbox': label inbox messages as known-sender or unknown-sender
@@ -310,7 +321,7 @@ def scan_inbox(service, conn, user_id, label_configs, label_id_cache, known_send
 
     Returns the total number of messages labeled in this run.
     """
-    query = _unlabeled_query(label_configs, scope=scope)
+    query = _unlabeled_query(label_configs, scope=scope, countdown_labels=countdown_labels)
     logger.info("Inbox scan starting (query=%s, known_senders=%d)",
                 query, len(known_senders or []))
 

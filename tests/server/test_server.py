@@ -1095,6 +1095,39 @@ class TestApiMe:
                     client.cookies.set("session", token)
                     return client.get("/api/me")
 
+    def test_countdown_labels_count_as_unknown(self):
+        # In Sunset, waiting mail carries a countdown label instead of c/u.
+        svc = self._make_gmail_service(messages_total=100, labeled_unknown_total=40)
+        labels_api = svc.users.return_value.labels.return_value
+        labels_api.list.return_value.execute.return_value["labels"].append({"name": "c/4h", "id": "Label_c4h"})
+        base_get = labels_api.get.side_effect
+
+        def _get(**kwargs):
+            if kwargs.get("id") == "Label_c4h":
+                result = MagicMock()
+                result.execute.return_value = {"messagesTotal": 5}
+                return result
+            return base_get(**kwargs)
+        labels_api.get.side_effect = _get
+
+        messages_api = svc.users.return_value.messages.return_value
+        base_list = messages_api.list.side_effect
+        queries = []
+
+        def _list(**kwargs):
+            queries.append(kwargs.get("q", ""))
+            if kwargs.get("labelIds") == ["INBOX", "Label_c4h"]:
+                result = MagicMock()
+                result.execute.return_value = {"messages": [{"id": "w1"}, {"id": "w2"}]}
+                return result
+            return base_list(**kwargs)
+        messages_api.list.side_effect = _list
+
+        body = self._get_me(svc).json()
+        assert body["allmail_labeled_unknown_count"] == 45
+        assert body["inbox_labeled_unknown_shallow_count"] == 2
+        assert any(q.startswith("in:inbox") and "-label:c/4h" in q for q in queries)
+
     def test_renames_old_label_names_and_keeps_counts(self):
         from claven.core.labels import label_body
         svc = self._make_gmail_service(messages_total=100, labeled_known_total=60,
@@ -2294,6 +2327,8 @@ class TestInternalSunset:
         assert mock_archive.call_args.args[1] == "c/u"
         mock_db.log_event.assert_called_once()
         mock_countdowns.assert_called_once()
+        # Countdowns replace c/u while mail waits, so the sweep needs its id to swap back.
+        assert mock_countdowns.call_args.args[1:3] == ("c/u", "id-c/u")
         mock_db.set_sunset_countdown_active.assert_called_once_with(ANY, "uid-1", True)
 
     def test_renames_old_labels_before_archiving(self):
@@ -2346,6 +2381,7 @@ class TestInternalSunset:
         with patch.dict("os.environ", _ENV):
             with patch("claven.server.db") as mock_db, \
                  patch("claven.server.auth"), \
+                 patch("claven.routes.internal.build_label_id_cache", side_effect=lambda svc, names: {n: f"id-{n}" for n in names}), \
                  patch("claven.routes.internal.clear_countdowns", return_value=6) as mock_clear:
                 _fake_db_ctx(mock_db)
                 mock_db.get_countdown_cleanup_users.return_value = ["uid-9"]
@@ -2354,6 +2390,8 @@ class TestInternalSunset:
                     response = client.post("/internal/sunset", headers=self._AUTH)
         assert response.status_code == 200
         mock_clear.assert_called_once()
+        # Mail that was counting down goes back to c/u.
+        assert mock_clear.call_args.args[1] == "id-c/u"
         mock_db.set_sunset_countdown_active.assert_called_once_with(ANY, "uid-9", False)
 
 

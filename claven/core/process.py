@@ -19,8 +19,8 @@ def process_message(service, message_id, label_configs, label_id_cache, known_se
     config: matched, unmatched, or (if no unknown_label configured) unchanged.
 
     sunset: in Sunset mode, {"hours", "changed_at", "label_ids"}; unread,
-    unstarred unknown-sender inbox mail then gets its first countdown label in
-    the same call as the unknown label. None in other modes.
+    unstarred unknown-sender inbox mail then gets its first countdown label
+    instead of the unknown label. None in other modes.
 
     Returns True if at least one label was newly applied, False otherwise.
     """
@@ -44,7 +44,10 @@ def process_message(service, message_id, label_configs, label_id_cache, known_se
         apply_id = label_config["id"] if matched else label_config.get("unknown_label")
         if apply_id:
             gmail_label_id = label_id_cache.get(apply_id)
-            if gmail_label_id and gmail_label_id not in existing_labels:
+            counting_down = sunset and not matched and set(existing_labels) & set(sunset["label_ids"].values())
+            if counting_down:
+                logger.debug("process_message: %s already counting down, skipping", message_id)
+            elif gmail_label_id and gmail_label_id not in existing_labels:
                 countdown = None
                 if (not matched and sunset and internal_date_ms is not None
                         and {"INBOX", "UNREAD"} <= set(existing_labels) and "STARRED" not in existing_labels):
@@ -53,8 +56,8 @@ def process_message(service, message_id, label_configs, label_id_cache, known_se
                 else:
                     logger.debug("process_message: %s gets no countdown", message_id)
                 if countdown:
-                    apply_label(service, message_id, gmail_label_id, sunset["label_ids"][countdown])
-                    logger.info("Labeled message %s as '%s' with countdown '%s'", message_id, apply_id, countdown)
+                    apply_label(service, message_id, sunset["label_ids"][countdown])
+                    logger.info("Labeled message %s as '%s' (unknown sender, counting down)", message_id, countdown)
                 else:
                     apply_label(service, message_id, gmail_label_id)
                     logger.info("Labeled message %s as '%s'", message_id, apply_id)

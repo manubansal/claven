@@ -29,7 +29,7 @@ Triggered by Cloud Scheduler, not by the user, and not subject to `cancel_state`
 
 - **Poll** (`/internal/poll`, hourly) — catch-up for missed push notifications
 - **Renew watches** (`/internal/renew-watches`, daily) — extends Gmail push watches
-- **Sunset sweep** (`/internal/sunset`, every 15 min) — for users in Sunset mode, archives unread, unstarred unknown-sender inbox mail older than the timer, then updates countdown labels; for users who left Sunset, deletes the countdown labels
+- **Sunset sweep** (`/internal/sunset`, every 15 min) — for users in Sunset mode, archives unread, unstarred unknown-sender inbox mail older than the timer, then updates countdown labels (which replace `c/u` while mail waits); for users who left Sunset, puts `c/u` back on waiting mail and deletes the countdown labels
 
 The Sunset sweep can overlap with scans or an Archive unknown-sender job. That is safe: removing INBOX and moving countdown labels are idempotent, and the sweep only touches unknown-sender mail.
 

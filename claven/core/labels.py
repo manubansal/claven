@@ -2,7 +2,8 @@
 
 c/k   known sender (green)
 c/u   unknown sender (grey)
-c/3d … c/1h   Sunset countdown ("gone within"), calm to urgent: blue, yellow, orange, red
+c/3d … c/1h   Sunset countdown ("gone within"), in place of c/u while mail waits;
+              calm to urgent: blue, yellow, orange, red
 c/s   sent mail already scanned for known senders (hidden)
 """
 
