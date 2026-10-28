@@ -505,6 +505,24 @@ def get_sunset_users(conn) -> list[dict]:
         return [{"user_id": r[0], "sunset_hours": r[1], "changed_at": r[2]} for r in cur.fetchall()]
 
 
+def set_sunset_countdown_active(conn, user_id: str, active: bool) -> None:
+    """Record whether the user's mailbox has Sunset countdown labels."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE scan_state SET sunset_countdown_active = %s, updated_at = NOW() WHERE user_id = %s",
+            (active, user_id),
+        )
+
+
+def get_countdown_cleanup_users(conn) -> list[str]:
+    """User ids that left Sunset but still have countdown labels to remove."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT user_id::text FROM scan_state WHERE sunset_countdown_active AND inbox_mode <> 'sunset'"
+        )
+        return [r[0] for r in cur.fetchall()]
+
+
 def get_auto_archive_unknown(conn, user_id: str) -> bool:
     """True when unknown-sender mail is archived immediately (Gatekeeper mode)."""
     return get_inbox_mode(conn, user_id)["mode"] == "gatekeeper"

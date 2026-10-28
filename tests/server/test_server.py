@@ -2241,8 +2241,11 @@ class TestInternalSunset:
         with patch.dict("os.environ", _ENV):
             with patch("claven.server.db") as mock_db, \
                  patch("claven.server.auth") as mock_auth, \
-                 patch("claven.routes.internal.archive_expired_unknown", return_value=2) as mock_archive:
+                 patch("claven.routes.internal.archive_expired_unknown", return_value=2) as mock_archive, \
+                 patch("claven.routes.internal.build_label_id_cache", return_value={}), \
+                 patch("claven.routes.internal.update_countdowns") as mock_countdowns:
                 _fake_db_ctx(mock_db)
+                mock_db.get_countdown_cleanup_users.return_value = []
                 mock_db.get_sunset_users.return_value = [
                     {"user_id": "uid-1", "sunset_hours": 24, "changed_at": long_ago},
                     {"user_id": "uid-2", "sunset_hours": 24, "changed_at": long_ago},
@@ -2255,14 +2258,19 @@ class TestInternalSunset:
         mock_archive.assert_called_once()
         assert mock_archive.call_args.args[1] == "unknown-sender"
         mock_db.log_event.assert_called_once()
+        mock_countdowns.assert_called_once()
+        mock_db.set_sunset_countdown_active.assert_called_once_with(ANY, "uid-1", True)
 
     def test_skips_user_whose_timer_has_not_run_since_switching(self):
         from datetime import datetime, timezone
         with patch.dict("os.environ", _ENV):
             with patch("claven.server.db") as mock_db, \
                  patch("claven.server.auth"), \
-                 patch("claven.routes.internal.archive_expired_unknown") as mock_archive:
+                 patch("claven.routes.internal.archive_expired_unknown") as mock_archive, \
+                 patch("claven.routes.internal.build_label_id_cache", return_value={}), \
+                 patch("claven.routes.internal.update_countdowns") as mock_countdowns:
                 _fake_db_ctx(mock_db)
+                mock_db.get_countdown_cleanup_users.return_value = []
                 mock_db.get_sunset_users.return_value = [
                     {"user_id": "uid-1", "sunset_hours": 24, "changed_at": datetime.now(timezone.utc)},
                 ]
@@ -2271,3 +2279,19 @@ class TestInternalSunset:
                     response = client.post("/internal/sunset", headers=self._AUTH)
         assert response.status_code == 200
         mock_archive.assert_not_called()
+        # Countdowns still show during the switch-over timer.
+        mock_countdowns.assert_called_once()
+
+    def test_clears_countdown_labels_for_users_who_left_sunset(self):
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.server.db") as mock_db, \
+                 patch("claven.server.auth"), \
+                 patch("claven.routes.internal.clear_countdowns", return_value=6) as mock_clear:
+                _fake_db_ctx(mock_db)
+                mock_db.get_countdown_cleanup_users.return_value = ["uid-9"]
+                mock_db.get_sunset_users.return_value = []
+                with TestClient(app) as client:
+                    response = client.post("/internal/sunset", headers=self._AUTH)
+        assert response.status_code == 200
+        mock_clear.assert_called_once()
+        mock_db.set_sunset_countdown_active.assert_called_once_with(ANY, "uid-9", False)

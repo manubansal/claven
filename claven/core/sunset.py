@@ -7,9 +7,16 @@ sweep twice is harmless.
 """
 
 import logging
-from datetime import datetime, timedelta
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 
-from claven.core.gmail import _BATCH_LIMIT, batch_remove_labels, gmail_retry
+from claven.core.gmail import (
+    _BATCH_LIMIT,
+    batch_get_message_metadata,
+    batch_modify_labels,
+    batch_remove_labels,
+    gmail_retry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +26,12 @@ logger = logging.getLogger(__name__)
 INBOX_MODES = ("label_only", "gatekeeper", "sunset")
 SUNSET_HOURS_CHOICES = (4, 12, 24, 72)
 DEFAULT_SUNSET_HOURS = 24
+
+# Countdown labels on mail waiting in Sunset. A label names the largest step
+# that still fits the time left, so "4h left" means at least 4 hours remain.
+COUNTDOWN_STEPS = ((72, "3d"), (24, "24h"), (12, "12h"), (4, "4h"), (1, "1h"))
+COUNTDOWN_UNDER = "sunset/under 1h left"
+COUNTDOWN_LABELS = tuple(f"sunset/{name} left" for _, name in COUNTDOWN_STEPS) + (COUNTDOWN_UNDER,)
 
 
 def sunset_cutoff(now: datetime, sunset_hours: int, mode_changed_at: datetime | None) -> datetime | None:
@@ -39,6 +52,105 @@ def sunset_cutoff(now: datetime, sunset_hours: int, mode_changed_at: datetime | 
 def sunset_query(unknown_label: str, cutoff: datetime) -> str:
     """Gmail search for unknown-sender inbox mail that has expired unread."""
     return f"in:inbox is:unread -is:starred label:{unknown_label} before:{int(cutoff.timestamp())}"
+
+
+def waiting_query(unknown_label: str) -> str:
+    """Gmail search for unknown-sender mail still waiting in the inbox."""
+    return f"in:inbox is:unread -is:starred label:{unknown_label}"
+
+
+def _list_ids(service, **query) -> list[str]:
+    """All message ids for a messages.list query (q= or labelIds=), across pages."""
+    ids = []
+    page_token = None
+    while True:
+        kwargs = {"userId": "me", "maxResults": 500, **query}
+        if page_token:
+            kwargs["pageToken"] = page_token
+        result = gmail_retry(lambda: service.users().messages().list(**kwargs).execute())
+        ids.extend(m["id"] for m in result.get("messages", []))
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            return ids
+        logger.debug("_list_ids: fetching next page")
+
+
+def countdown_label(remaining: timedelta) -> str:
+    """Countdown label for the time left, rounded down to a step."""
+    for hours, name in COUNTDOWN_STEPS:
+        if remaining >= timedelta(hours=hours):
+            return f"sunset/{name} left"
+    logger.debug("countdown_label: %s left, under the smallest step", remaining)
+    return COUNTDOWN_UNDER
+
+
+def message_expiry(internal_date_ms: int, sunset_hours: int, mode_changed_at: datetime | None) -> datetime:
+    """When a waiting message expires: arrival (or the switch to Sunset, if later) plus the timer."""
+    start = datetime.fromtimestamp(internal_date_ms / 1000, tz=timezone.utc)
+    if mode_changed_at is not None and mode_changed_at > start:
+        logger.debug("message_expiry: arrived before switching to Sunset, timer starts at the switch")
+        start = mode_changed_at
+    return start + timedelta(hours=sunset_hours)
+
+
+def update_countdowns(service, unknown_label: str, now: datetime, sunset_hours: int,
+                      mode_changed_at: datetime | None, label_ids: dict[str, str]) -> int:
+    """Put the right countdown label on each waiting message; strip it from the rest.
+
+    label_ids maps each name in COUNTDOWN_LABELS to its Gmail label id.
+    Returns the number of waiting messages whose countdown label changed.
+    """
+    countdown_ids = set(label_ids.values())
+    waiting = _list_ids(service, q=waiting_query(unknown_label))
+
+    to_step = defaultdict(list)
+    for i in range(0, len(waiting), _BATCH_LIMIT):
+        metadata = batch_get_message_metadata(service, waiting[i:i + _BATCH_LIMIT], ["From"])
+        for message_id, (_headers, labels, internal_date_ms) in metadata.items():
+            if internal_date_ms is None:
+                logger.debug("update_countdowns: %s has no date, skipping", message_id)
+                continue
+            remaining = message_expiry(internal_date_ms, sunset_hours, mode_changed_at) - now
+            want = label_ids[countdown_label(remaining)]
+            if set(labels) & countdown_ids != {want}:
+                to_step[want].append(message_id)
+            else:
+                logger.debug("update_countdowns: %s already on the right step", message_id)
+
+    changed = 0
+    for want, ids in to_step.items():
+        batch_modify_labels(service, ids, add_label_ids=[want], remove_label_ids=sorted(countdown_ids - {want}))
+        changed += len(ids)
+
+    # Read, starred, or archived mail no longer waits: drop its countdown label.
+    waiting_set = set(waiting)
+    stale = set()
+    for label_id in countdown_ids:
+        stale.update(m for m in _list_ids(service, labelIds=[label_id]) if m not in waiting_set)
+    if stale:
+        logger.debug("update_countdowns: clearing countdown from %d messages", len(stale))
+        batch_modify_labels(service, sorted(stale), remove_label_ids=sorted(countdown_ids))
+    else:
+        logger.debug("update_countdowns: no stale countdown labels")
+
+    logger.info("Sunset countdowns: %d waiting, %d moved, %d cleared", len(waiting), changed, len(stale))
+    return changed
+
+
+def clear_countdowns(service) -> int:
+    """Delete Claven's countdown labels (which also removes them from every message).
+
+    Used after a user leaves Sunset. Returns the number of labels deleted.
+    """
+    labels = gmail_retry(lambda: service.users().labels().list(userId="me").execute()).get("labels", [])
+    deleted = 0
+    for label in labels:
+        if label["name"] in COUNTDOWN_LABELS:
+            gmail_retry(lambda lid=label["id"]: service.users().labels().delete(userId="me", id=lid).execute())
+            deleted += 1
+        else:
+            logger.debug("clear_countdowns: keeping label %s", label["name"])
+    return deleted
 
 
 def archive_expired_unknown(service, unknown_label: str, cutoff: datetime) -> int:

@@ -447,6 +447,21 @@ def batch_remove_labels(service, message_ids, label_ids_to_remove, max_retries=3
     return modified
 
 
+def batch_modify_labels(service, message_ids, add_label_ids=(), remove_label_ids=()):
+    """Add and/or remove labels on many messages with messages.batchModify.
+
+    batchModify takes up to 1,000 ids per call; removing a label a message
+    doesn't have is a no-op.
+    """
+    for i in range(0, len(message_ids), 1000):
+        body = {
+            "ids": message_ids[i:i + 1000],
+            "addLabelIds": list(add_label_ids),
+            "removeLabelIds": list(remove_label_ids),
+        }
+        gmail_retry(lambda b=body: service.users().messages().batchModify(userId="me", body=b).execute())
+
+
 def batch_swap_labels(service, message_ids, remove_label_id, add_label_id, max_retries=3):
     """Atomically swap labels on up to _BATCH_LIMIT messages.
 

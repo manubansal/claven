@@ -337,3 +337,21 @@ class TestInboxMode:
         assert gate_id not in users
         assert users[sunset_id]["sunset_hours"] == 72
         assert users[sunset_id]["changed_at"] is not None
+
+
+class TestSunsetCountdownFlag:
+    def test_users_who_left_sunset_with_countdown_labels_need_cleanup(self, db_conn):
+        user_id = db.upsert_user(db_conn, "countdown-left@example.com")
+        db.set_history_id(db_conn, user_id, 1)
+        db.set_inbox_mode(db_conn, user_id, "sunset")
+        db.set_sunset_countdown_active(db_conn, user_id, True)
+        assert user_id not in db.get_countdown_cleanup_users(db_conn)  # still in Sunset
+        db.set_inbox_mode(db_conn, user_id, "gatekeeper")
+        assert user_id in db.get_countdown_cleanup_users(db_conn)
+        db.set_sunset_countdown_active(db_conn, user_id, False)
+        assert user_id not in db.get_countdown_cleanup_users(db_conn)
+
+    def test_never_used_sunset_needs_no_cleanup(self, db_conn):
+        user_id = db.upsert_user(db_conn, "countdown-never@example.com")
+        db.set_history_id(db_conn, user_id, 1)
+        assert user_id not in db.get_countdown_cleanup_users(db_conn)
