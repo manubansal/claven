@@ -34,6 +34,8 @@ def _classify_error(exc: Exception) -> str:
     Used by _run_task to store classified labels instead of raw exception text.
     """
     exc_str = str(exc).lower()
+    if "deadlock" in exc_str:
+        return "error.db.deadlock"
     if "connection" in exc_str or "closed" in exc_str or "ssl" in exc_str:
         return "error.db.connection_lost"
     if "429" in exc_str or "rate" in exc_str:

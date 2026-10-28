@@ -91,6 +91,12 @@ _ENV = {
 
 
 class TestClassifyError:
+    def test_deadlock_is_a_database_error(self):
+        # The deadlock message names the gmail_tokens table; it is not an expired sign-in.
+        from claven.tasks import _classify_error
+        exc = Exception('deadlock detected\nCONTEXT:  while inserting index tuple (0,11) in relation "gmail_tokens"')
+        assert _classify_error(exc) == "error.db.deadlock"
+
     def test_connection_error(self):
         from claven.tasks import _classify_error
         assert _classify_error(Exception("connection refused")) == "error.db.connection_lost"
@@ -752,6 +758,41 @@ class TestWebhookGmail:
                             headers=_PUBSUB_HEADERS,
                         )
         mock_db.increment_processed_count.assert_called_once_with(ANY, "uid-1", 3)
+
+    def _webhook(self, has_new, sent_status="complete"):
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.server.db") as mock_db, patch("claven.server.auth") as mock_auth, \
+                 patch("claven.server.has_new_messages", return_value=has_new), \
+                 patch("claven.server.poll_new_messages", return_value=0) as mock_poll, \
+                 patch("claven.server.build_known_senders") as mock_build:
+                _fake_db_ctx(mock_db)
+                mock_db.get_user_by_email.return_value = {"id": "uid-1", "email": "user@example.com"}
+                mock_db.get_history_id.return_value = 100
+                mock_db.get_sent_scan_progress.return_value = {"status": sent_status, "updated_at": None}
+                mock_db.get_known_senders.return_value = set()
+                mock_auth.get_service.return_value = MagicMock()
+                with _mock_pubsub_token():
+                    with TestClient(app) as client:
+                        response = client.post("/webhook/gmail", json=_pubsub_payload(history_id="200"),
+                                               headers=_PUBSUB_HEADERS)
+        return response, mock_db, mock_poll, mock_build
+
+    def test_label_changes_only_just_advance_history(self):
+        # Claven's own label changes on inbox mail trigger pushes; nothing was added.
+        response, mock_db, mock_poll, mock_build = self._webhook(has_new=False)
+        assert response.status_code == 200
+        mock_poll.assert_not_called()
+        mock_build.assert_not_called()
+        mock_db.set_history_id.assert_called_once_with(ANY, "uid-1", 200)
+
+    def test_new_messages_are_processed(self):
+        _, _, mock_poll, mock_build = self._webhook(has_new=True)
+        mock_poll.assert_called_once()
+        mock_build.assert_called_once()
+
+    def test_unfinished_sent_scan_still_reconciles(self):
+        _, _, _, mock_build = self._webhook(has_new=False, sent_status="error.unknown")
+        mock_build.assert_called_once()
 
     def test_webhook_skips_locked_user(self):
         with patch.dict("os.environ", _ENV):

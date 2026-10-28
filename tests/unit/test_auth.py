@@ -218,6 +218,23 @@ class TestGetService:
                 get_service(conn, "user-uuid", VALID_KEY_HEX)
             mock_store.assert_called_once()
 
+    def test_refreshed_token_is_saved_in_its_own_transaction(self):
+        """Saving inside the caller's long transaction deadlocked against other jobs."""
+        from datetime import datetime
+
+        conn = MagicMock()
+        with patch("claven.core.auth.db") as mock_db, \
+             patch("claven.core.auth.build"), \
+             patch("claven.core.auth.Request"), \
+             patch.dict("os.environ", {"OAUTH_CLIENT_ID": "cid", "OAUTH_CLIENT_SECRET": "csec"}):
+            mock_db.load_tokens.return_value = self._make_token_row(datetime(2000, 1, 1))
+            token_conn = mock_db.get_connection.return_value.__enter__.return_value
+            with patch("claven.core.auth.store_credentials") as mock_store, \
+                 patch("google.oauth2.credentials.Credentials.refresh"):
+                get_service(conn, "user-uuid", VALID_KEY_HEX)
+            assert mock_store.call_args.args[0] is token_conn
+            assert mock_store.call_args.args[0] is not conn
+
     def test_does_not_refresh_when_token_is_valid(self):
         """A non-expired token must not trigger a refresh call."""
         from datetime import datetime
