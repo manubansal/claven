@@ -9,7 +9,14 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 
 import claven.server as _srv
-from claven.core.sunset import archive_expired_unknown, sunset_cutoff
+from claven.core.gmail import build_label_id_cache
+from claven.core.sunset import (
+    COUNTDOWN_LABELS,
+    archive_expired_unknown,
+    clear_countdowns,
+    sunset_cutoff,
+    update_countdowns,
+)
 from claven.routes.auth import _require_internal_auth, _verify_pubsub_token
 
 logger = logging.getLogger(__name__)
@@ -144,11 +151,13 @@ def internal_build_known_senders(request: Request):
 
 @router.post("/internal/sunset")
 def internal_sunset(request: Request):
-    """Archive expired unknown-sender mail for users in Sunset mode.
+    """Sunset sweep: archive expired unknown-sender mail and update countdown labels.
 
-    Unread, unstarred unknown-sender inbox mail older than the user's timer is
-    archived. Idempotent. Intended to be triggered every 15 minutes by Cloud
-    Scheduler.
+    For users in Sunset mode, unread, unstarred unknown-sender inbox mail older
+    than the user's timer is archived, and every message still waiting gets a
+    countdown label (sunset/4h left, ...). For users who left Sunset, the
+    countdown labels are deleted. Idempotent. Intended to be triggered every
+    15 minutes by Cloud Scheduler.
     """
     _require_internal_auth(request)
     now = datetime.now(timezone.utc)
@@ -158,27 +167,43 @@ def internal_sunset(request: Request):
     results = []
 
     with _srv.db.get_connection() as conn:
+        cleanup_users = _srv.db.get_countdown_cleanup_users(conn)
         users = _srv.db.get_sunset_users(conn)
+
+    for user_id in cleanup_users:
+        with _srv.db.get_connection() as conn:
+            try:
+                service = _srv.auth.get_service(conn, user_id, os.environ["TOKEN_ENCRYPTION_KEY"])
+                deleted = clear_countdowns(service)
+                _srv.db.set_sunset_countdown_active(conn, user_id, False)
+                logger.debug("sunset: %s left Sunset, deleted %d countdown labels", user_id, deleted)
+            except Exception as exc:
+                from claven.tasks import _handle_error
+                _handle_error(exc, user_id, "Sunset cleanup", conn)
 
     for user in users:
         user_id = user["user_id"]
         cutoff = sunset_cutoff(now, user["sunset_hours"], user["changed_at"])
-        if cutoff is None:
-            logger.debug("sunset: skipping %s (timer not yet run since switching)", user_id)
-            continue
         with _srv.db.get_connection() as conn:
             try:
                 if not _srv.db.get_history_id(conn, user_id):
                     logger.debug("sunset: skipping %s (not connected)", user_id)
                     continue
                 service = _srv.auth.get_service(conn, user_id, os.environ["TOKEN_ENCRYPTION_KEY"])
-                archived = archive_expired_unknown(service, unknown_label, cutoff)
+                archived = 0
+                if cutoff is None:
+                    logger.debug("sunset: %s timer not yet run since switching, nothing to archive", user_id)
+                else:
+                    archived = archive_expired_unknown(service, unknown_label, cutoff)
                 if archived:
                     logger.debug("sunset: %s archived %d", user_id, archived)
                     _srv.db.log_event(conn, user_id, "sunset_archived",
                                       f"Sunset archived {archived} unread unknown-sender message{'s' if archived != 1 else ''}")
                 else:
-                    logger.debug("sunset: %s nothing expired", user_id)
+                    logger.debug("sunset: %s nothing archived", user_id)
+                label_ids = build_label_id_cache(service, list(COUNTDOWN_LABELS))
+                update_countdowns(service, unknown_label, now, user["sunset_hours"], user["changed_at"], label_ids)
+                _srv.db.set_sunset_countdown_active(conn, user_id, True)
                 archived_total += archived
                 results.append({"user_id": user_id, "status": "ok", "archived": archived})
             except Exception as exc:

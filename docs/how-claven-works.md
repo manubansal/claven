@@ -70,7 +70,9 @@ The inbox mode decides what happens to unknown-sender mail after it is labeled:
 | **Gatekeeper** (default) | Archived as soon as it is labeled. Your inbox only shows mail from people you know. |
 | **Sunset** | Stays in your inbox for a timer you pick (4h, 12h, 24h, or 3 days). If it is still unread and unstarred when the timer runs out, it is archived. Opening or starring it keeps it in your inbox. |
 
-Sunset gives you a chance to skim every message in your normal inbox, by sender, subject and preview, without visiting a separate label. Whatever you ignore is filed away for you. Claven checks for expired mail every 15 minutes, so an expired message can stay up to 15 minutes past its timer. When you switch to Sunset, mail already in your inbox gets a full timer from the moment you switch.
+Sunset gives you a chance to skim every message in your normal inbox, by sender, subject and preview, without visiting a separate label. Whatever you ignore is filed away for you.
+
+While a message waits, it carries a countdown label showing how much time it has left, such as `sunset/4h left`. The label shows the time left rounded down to a step (3d, 24h, 12h, 4h, 1h, then `under 1h`), so `4h left` means at least four hours remain. Countdown labels are updated every 15 minutes, and a new message gets its first one within 15 minutes of arriving. Reading or starring the message removes its countdown label. If you leave Sunset mode, Claven deletes the countdown labels. Claven checks for expired mail every 15 minutes, so an expired message can stay up to 15 minutes past its timer. When you switch to Sunset, mail already in your inbox gets a full timer from the moment you switch.
 
 Archived mail is never deleted. It stays in All Mail with its `unknown-sender` label.
 
@@ -86,7 +88,7 @@ The thread now has both labels. This is expected behavior. Gmail shows a thread 
 
 ## Gmail labels managed by Claven
 
-Claven creates and manages three Gmail labels. These are visible in your Gmail sidebar and search.
+Claven creates and manages three Gmail labels, plus the countdown labels in Sunset mode. These are visible in your Gmail sidebar and search.
 
 ### Labels added
 
@@ -95,6 +97,7 @@ Claven creates and manages three Gmail labels. These are visible in your Gmail s
 | `claven/sent-scanned` | Sent scan | After extracting recipients from a sent message | Sent messages, after their recipients are saved to the database |
 | `known-sender` | Label scan | When an unlabeled message's sender is in the known senders list | Unlabeled inbox messages (or all mail, depending on scope) |
 | `unknown-sender` | Label scan | When an unlabeled message's sender is NOT in the known senders list | Unlabeled inbox messages (or all mail, depending on scope) |
+| `sunset/… left` | Sunset sweep | Every 15 minutes, in Sunset mode | Unread, unstarred `unknown-sender` messages in the inbox. One countdown label per message, moved to the next step as time runs down |
 
 ### Labels swapped
 
@@ -108,11 +111,12 @@ Claven creates and manages three Gmail labels. These are visible in your Gmail s
 |---|---|---|
 | `INBOX` | Gatekeeper mode | When an unknown-sender message is labeled. |
 | `INBOX` | Sunset mode | When an unknown-sender message is still unread and unstarred after the Sunset timer. |
+| `sunset/… left` | Sunset sweep | When the message is read, starred, or archived. All countdown labels are deleted when you leave Sunset mode. |
 | `INBOX` | Archive action | When the user clicks "Archive unknown-sender" on the dashboard. Removes the INBOX label from individual messages with the `unknown-sender` label, moving them out of the inbox. The `unknown-sender` label itself stays on the message. |
 
 ### Labels Claven never modifies
 
-Claven does not add, remove, or modify any Gmail labels other than the three listed above and the INBOX label (via Gatekeeper, Sunset, or the archive action). In Sunset mode it reads, but never changes, UNREAD and STARRED. It never changes UNREAD, STARRED, IMPORTANT, SPAM, TRASH, or any user-created labels.
+Claven does not add, remove, or modify any Gmail labels other than the ones listed above and the INBOX label (via Gatekeeper, Sunset, or the archive action). In Sunset mode it reads, but never changes, UNREAD and STARRED. It never changes UNREAD, STARRED, IMPORTANT, SPAM, TRASH, or any user-created labels.
 
 ## Inbox-only labeling
 

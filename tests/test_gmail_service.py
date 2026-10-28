@@ -557,3 +557,22 @@ class TestBatchApplyLabels:
 
         result = batch_apply_labels(service, [("m1", "L1")], max_retries=0)
         assert result == 0
+
+
+class TestBatchModifyLabels:
+    def test_chunks_of_1000_with_add_and_remove(self):
+        from claven.core.gmail import batch_modify_labels
+        service = MagicMock()
+        ids = [f"m{i}" for i in range(1500)]
+        batch_modify_labels(service, ids, add_label_ids=["A"], remove_label_ids=["R1", "R2"])
+        calls = service.users().messages().batchModify.call_args_list
+        bodies = [c.kwargs["body"] for c in calls if "body" in c.kwargs]
+        assert [len(b["ids"]) for b in bodies] == [1000, 500]
+        assert bodies[0]["addLabelIds"] == ["A"]
+        assert bodies[0]["removeLabelIds"] == ["R1", "R2"]
+
+    def test_empty_ids_makes_no_call(self):
+        from claven.core.gmail import batch_modify_labels
+        service = MagicMock()
+        batch_modify_labels(service, [], remove_label_ids=["R"])
+        assert not [c for c in service.users().messages().batchModify.call_args_list if "body" in c.kwargs]
