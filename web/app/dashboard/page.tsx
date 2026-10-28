@@ -623,26 +623,9 @@ export default function DashboardPage() {
                       return (
                         <>
                           <InfoSection
-                            icon={severity === "info" ? Loader2 : severity === "warning" ? AlertTriangle : severity === "error" ? AlertCircle : severity === "success" ? CheckCircle : Clock}
-                            iconColor={severity === "error" ? "text-destructive" : severity === "warning" ? "text-yellow-500" : severity === "success" ? "text-green-500" : ""}
-                            iconSpin={severity === "info"}
-                            iconTestId={iconTestId}
-                            title="Inbox scan"
-                            errorCode={inboxErrorCode}
+                            title="Inbox mode"
                             action={
-                              <div className="flex flex-wrap justify-end gap-2">
-                                <div className="flex rounded-md border border-border/50 overflow-hidden text-[10px] text-muted-foreground w-36">
-                                  <button onClick={() => handleScanScope("inbox")}
-                                    className={cn("flex-1 px-3 py-0.5 transition-colors text-center",
-                                      (scan_scope ?? "inbox") === "inbox" ? "bg-muted font-medium text-foreground" : "hover:text-foreground")}>
-                                    Inbox
-                                  </button>
-                                  <button onClick={() => handleScanScope("allmail")}
-                                    className={cn("flex-1 px-3 py-0.5 transition-colors border-l border-border/50 text-center",
-                                      scan_scope === "allmail" ? "bg-muted font-medium text-foreground" : "hover:text-foreground")}>
-                                    All mail
-                                  </button>
-                                </div>
+                              <div className="flex gap-2">
                                 <div className="flex rounded-md border border-border/50 overflow-hidden text-[10px] text-muted-foreground">
                                   {INBOX_MODES.map((m, i) => {
                                     const active = inboxMode === m.value;
@@ -666,6 +649,33 @@ export default function DashboardPage() {
                                     ))}
                                   </select>
                                 )}
+                              </div>
+                            }
+                            rows={[
+                              { label: <span className="text-left">{INBOX_MODES.find((m) => m.value === inboxMode)?.hint}</span>, value: null },
+                            ]}
+                          />
+                          <InfoSection
+                            icon={severity === "info" ? Loader2 : severity === "warning" ? AlertTriangle : severity === "error" ? AlertCircle : severity === "success" ? CheckCircle : Clock}
+                            iconColor={severity === "error" ? "text-destructive" : severity === "warning" ? "text-yellow-500" : severity === "success" ? "text-green-500" : ""}
+                            iconSpin={severity === "info"}
+                            iconTestId={iconTestId}
+                            title="Inbox scan"
+                            errorCode={inboxErrorCode}
+                            action={
+                              <div className="flex gap-2">
+                                <div className="flex rounded-md border border-border/50 overflow-hidden text-[10px] text-muted-foreground w-36">
+                                  <button onClick={() => handleScanScope("inbox")}
+                                    className={cn("flex-1 px-3 py-0.5 transition-colors text-center",
+                                      (scan_scope ?? "inbox") === "inbox" ? "bg-muted font-medium text-foreground" : "hover:text-foreground")}>
+                                    Inbox
+                                  </button>
+                                  <button onClick={() => handleScanScope("allmail")}
+                                    className={cn("flex-1 px-3 py-0.5 transition-colors border-l border-border/50 text-center",
+                                      scan_scope === "allmail" ? "bg-muted font-medium text-foreground" : "hover:text-foreground")}>
+                                    All mail
+                                  </button>
+                                </div>
                               </div>
                             }
                             rows={[
