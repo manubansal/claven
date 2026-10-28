@@ -43,15 +43,13 @@ class TestSunsetCutoff:
         assert sunset_cutoff(NOW, 4, None) == NOW - timedelta(hours=4)
 
 
-UNKNOWN_GROUP = "{label:unknown-sender label:c/3d label:c/24h label:c/12h label:c/4h label:c/1h}"
-
-
 class TestSunsetQuery:
     def test_query_targets_unread_unstarred_unknown_inbox_mail_before_cutoff(self):
         # Waiting mail carries a countdown label instead of the unknown label.
         cutoff = datetime(2026, 10, 27, 12, 0, tzinfo=timezone.utc)
-        q = sunset_query("unknown-sender", cutoff)
-        assert q == f"in:inbox is:unread -is:starred {UNKNOWN_GROUP} before:{int(cutoff.timestamp())}"
+        q = sunset_query("unknown-sender", cutoff, ["c/24h", "c/1h"])
+        assert q == ("in:inbox is:unread -is:starred {label:unknown-sender label:c/24h label:c/1h} "
+                     f"before:{int(cutoff.timestamp())}")
 
 
 def _list_pages(*pages):
@@ -66,9 +64,6 @@ def _list_pages(*pages):
 
 
 class TestUnknownGroup:
-    def test_unknown_label_or_any_countdown(self):
-        assert unknown_group("unknown-sender") == UNKNOWN_GROUP
-
     def test_only_listed_countdowns(self):
         # Searching a label that doesn't exist is avoided by naming only existing ones.
         assert unknown_group("c/u", ["c/4h"]) == "{label:c/u label:c/4h}"
@@ -83,18 +78,18 @@ class TestArchiveExpiredUnknown:
         service.users().messages().list().execute.side_effect = _list_pages(["a", "b"], ["c"])
         cutoff = NOW - timedelta(hours=24)
         with patch("claven.core.sunset.batch_remove_labels", return_value=3) as mock_remove:
-            count = archive_expired_unknown(service, "unknown-sender", cutoff)
+            count = archive_expired_unknown(service, "unknown-sender", cutoff, ["c/24h"])
         assert count == 3
         mock_remove.assert_called_once_with(service, ["a", "b", "c"], ["INBOX"])
         list_kwargs = service.users().messages().list.call_args_list[-1].kwargs
-        assert list_kwargs["q"] == sunset_query("unknown-sender", cutoff)
+        assert list_kwargs["q"] == sunset_query("unknown-sender", cutoff, ["c/24h"])
         assert list_kwargs["pageToken"] == "t1"
 
     def test_nothing_to_archive(self):
         service = MagicMock()
         service.users().messages().list().execute.return_value = {}
         with patch("claven.core.sunset.batch_remove_labels") as mock_remove:
-            count = archive_expired_unknown(service, "unknown-sender", NOW)
+            count = archive_expired_unknown(service, "unknown-sender", NOW, [])
         assert count == 0
         mock_remove.assert_not_called()
 
@@ -104,7 +99,7 @@ class TestArchiveExpiredUnknown:
         service.users().messages().list().execute.return_value = {"messages": [{"id": m} for m in ids]}
         with patch("claven.core.sunset.batch_remove_labels", side_effect=lambda s, b, l: len(b)) as mock_remove, \
                 patch("claven.core.sunset._BATCH_LIMIT", 100):
-            count = archive_expired_unknown(service, "unknown-sender", NOW)
+            count = archive_expired_unknown(service, "unknown-sender", NOW, [])
         assert count == 250
         assert [len(c.args[1]) for c in mock_remove.call_args_list] == [100, 100, 50]
 
@@ -115,32 +110,40 @@ from claven.core.sunset import (  # noqa: E402
     COUNTDOWN_LABELS,
     clear_countdowns,
     countdown_label,
+    countdown_labels_for,
     message_expiry,
     update_countdowns,
 )
 
 
 class TestCountdownLabel:
-    def test_labels_are_short_codes_under_c(self):
-        assert COUNTDOWN_LABELS == ("c/3d", "c/24h", "c/12h", "c/4h", "c/1h")
-
     @pytest.mark.parametrize("hours,label", [
-        (80, "c/3d"),
-        (72, "c/3d"),       # fresh mail on a 3-day timer shows the full timer
-        (71.9, "c/3d"),
-        (24.01, "c/3d"),
-        (24, "c/24h"),      # fresh mail on a 24h timer shows c/24h
-        (12.01, "c/24h"),
-        (12, "c/12h"),
-        (4.01, "c/12h"),
+        (80, "c/72h"),
+        (72, "c/72h"),      # fresh mail on a 3-day timer shows the full timer
+        (71.9, "c/72h"),
+        (71, "c/71h"),
+        (24, "c/24h"),      # fresh mail on a 24h timer shows c/24h for its first hour
+        (23.99, "c/24h"),
+        (23, "c/23h"),      # ...then c/23h: the mail has been seen
         (4, "c/4h"),        # "c/4h" means gone within 4 hours
-        (1.01, "c/4h"),
+        (1.01, "c/2h"),
         (1, "c/1h"),
         (0.5, "c/1h"),
         (-1, "c/1h"),       # overdue until the next sweep archives it
     ])
-    def test_rounds_time_left_up_to_a_step(self, hours, label):
+    def test_rounds_time_left_up_to_the_hour(self, hours, label):
         assert countdown_label(timedelta(hours=hours)) == label
+
+    def test_never_beyond_the_timer(self):
+        # A message stamped slightly in the future still starts at the full timer.
+        assert countdown_label(timedelta(hours=24, seconds=30), max_hours=24) == "c/24h"
+
+
+class TestCountdownLabelsFor:
+    def test_only_hours_up_to_the_timer(self):
+        assert countdown_labels_for(4) == ("c/4h", "c/3h", "c/2h", "c/1h")
+        assert len(countdown_labels_for(24)) == 24
+        assert countdown_labels_for(72) == COUNTDOWN_LABELS
 
 
 class TestMessageExpiry:
@@ -165,54 +168,76 @@ def _ids_by(service, mapping):
     service.users.return_value.messages.return_value.list.side_effect = _list
 
 
-LABEL_IDS = {name: f"L{i}" for i, name in enumerate(COUNTDOWN_LABELS)}  # L0=3d … L4=1h
+LABEL_IDS = {"c/24h": "L24", "c/10h": "L10", "c/9h": "L9", "c/1h": "L1"}
+GROUP = "{label:c/24h label:c/10h label:c/9h label:c/1h}"
+WAITING_Q = "in:inbox is:unread -is:starred {label:unknown-sender label:c/24h label:c/10h label:c/9h label:c/1h}"
+STALE_Q = GROUP + " {-in:inbox is:read is:starred}"
 
 
 class TestUpdateCountdowns:
     """A waiting message carries exactly one countdown label and no c/u; the rest carry c/u."""
 
-    def _run(self, waiting, metadata, labeled=None):
+    def _run(self, waiting, metadata, stale=()):
         service = MagicMock()
-        mapping = {f"in:inbox is:unread -is:starred {UNKNOWN_GROUP}": waiting}
-        for lid, ids in (labeled or {}).items():
-            mapping[(lid,)] = ids
-        _ids_by(service, mapping)
-        with patch("claven.core.sunset.batch_get_message_metadata", return_value=metadata), \
+        _ids_by(service, {WAITING_Q: waiting, STALE_Q: list(stale)})
+        fetch = lambda svc, ids, headers: {m: metadata[m] for m in ids if m in metadata}
+        with patch("claven.core.sunset.batch_get_message_metadata", side_effect=fetch), \
                 patch("claven.core.sunset.batch_modify_labels") as mock_modify:
             changed = update_countdowns(service, "unknown-sender", "LU", NOW, 24, NOW - timedelta(days=5), LABEL_IDS)
         return changed, mock_modify
 
-    def test_swaps_unknown_for_the_right_step(self):
-        ms = int((NOW - timedelta(hours=14)).timestamp() * 1000)  # 10h left → gone within 12h
-        changed, mock_modify = self._run(["m1"], {"m1": ({}, ["INBOX", "LU"], ms)})
+    def test_swaps_unknown_for_the_right_hour(self):
+        ms = int((NOW - timedelta(hours=14)).timestamp() * 1000)  # 10h left
+        changed, mock_modify = self._run(["m1"], {"m1": ({}, ["INBOX", "UNREAD", "LU"], ms)})
         assert changed == 1
         call = mock_modify.call_args_list[0]
         assert call.args[1] == ["m1"]
-        assert call.kwargs["add_label_ids"] == ["L2"]
-        assert set(call.kwargs["remove_label_ids"]) == {"LU", "L0", "L1", "L3", "L4"}
+        assert call.kwargs["add_label_ids"] == ["L10"]
+        assert set(call.kwargs["remove_label_ids"]) == {"LU", "L24", "L9", "L1"}
 
-    def test_strips_unknown_from_mail_already_on_the_right_step(self):
-        # Mail labeled before countdowns replaced c/u carries both.
-        ms = int((NOW - timedelta(hours=14)).timestamp() * 1000)
-        changed, mock_modify = self._run(["m1"], {"m1": ({}, ["INBOX", "LU", "L2"], ms)}, labeled={"L2": ["m1"]})
+    def test_steps_down_an_hour(self):
+        ms = int((NOW - timedelta(hours=15, minutes=30)).timestamp() * 1000)  # 8.5h left
+        changed, mock_modify = self._run(["m1"], {"m1": ({}, ["INBOX", "UNREAD", "L10"], ms)})
         assert changed == 1
-        assert mock_modify.call_args_list[0].kwargs["add_label_ids"] == ["L2"]
-        assert "LU" in mock_modify.call_args_list[0].kwargs["remove_label_ids"]
+        assert mock_modify.call_args_list[0].kwargs["add_label_ids"] == ["L9"]
 
-    def test_leaves_messages_already_on_the_right_step(self):
+    def test_leaves_messages_already_on_the_right_hour(self):
         ms = int((NOW - timedelta(hours=14)).timestamp() * 1000)
-        changed, mock_modify = self._run(["m1"], {"m1": ({}, ["INBOX", "L2"], ms)}, labeled={"L2": ["m1"]})
+        changed, mock_modify = self._run(["m1"], {"m1": ({}, ["INBOX", "UNREAD", "L10"], ms)})
+        assert changed == 0
+        mock_modify.assert_not_called()
+
+    def test_ignores_thread_mates_without_an_unknown_label(self):
+        # A search can return a known-sender message from the same thread.
+        ms = int((NOW - timedelta(hours=14)).timestamp() * 1000)
+        changed, mock_modify = self._run(["k1"], {"k1": ({}, ["INBOX", "UNREAD", "LK"], ms)})
+        assert changed == 0
+        mock_modify.assert_not_called()
+
+    def test_ignores_read_thread_mates(self):
+        # A read unknown-sender message can match the search through an unread one in its thread.
+        ms = int((NOW - timedelta(hours=14)).timestamp() * 1000)
+        changed, mock_modify = self._run(["r1"], {"r1": ({}, ["INBOX", "LU"], ms)})
         assert changed == 0
         mock_modify.assert_not_called()
 
     def test_mail_no_longer_waiting_goes_back_to_unknown(self):
         # m2 still carries a countdown label but was read, starred, or archived.
-        changed, mock_modify = self._run([], {}, labeled={"L3": ["m2"]})
+        changed, mock_modify = self._run([], {"m2": ({}, ["L9"], 0)}, stale=["m2"])
         mock_modify.assert_called_once()
         call = mock_modify.call_args
         assert call.args[1] == ["m2"]
         assert call.kwargs["add_label_ids"] == ["LU"]
         assert set(call.kwargs["remove_label_ids"]) == set(LABEL_IDS.values())
+
+    def test_stale_search_skips_messages_still_waiting(self):
+        # A read message's thread-mate can match the search while itself still waiting.
+        changed, mock_modify = self._run([], {"w1": ({}, ["INBOX", "UNREAD", "L9"], 0)}, stale=["w1"])
+        mock_modify.assert_not_called()
+
+    def test_stale_search_skips_thread_mates_without_a_countdown(self):
+        changed, mock_modify = self._run([], {"k1": ({}, ["LK"], 0)}, stale=["k1"])
+        mock_modify.assert_not_called()
 
 
 class TestClearCountdowns:
@@ -239,7 +264,7 @@ class TestClearCountdowns:
     def test_also_deletes_countdown_labels_with_old_names(self):
         service = MagicMock()
         service.users().labels().list().execute.return_value = {"labels": [
-            {"id": "L3", "name": "sunset/4h left"},
+            {"id": "L3", "name": "c/3d"},
             {"id": "L9", "name": "c/12h"},
             {"id": "X", "name": "c/u"},
         ]}

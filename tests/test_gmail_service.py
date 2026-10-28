@@ -664,6 +664,18 @@ class TestMigrateLegacyLabels:
 
 
 class TestRetiredLabels:
+    def test_countdown_labels_switch_to_show_if_unread(self):
+        from claven.core.gmail import migrate_legacy_labels
+        service = mock_service()
+        labels = [
+            {"id": "L24", "name": "c/24h", "labelListVisibility": "labelShow"},
+            {"id": "L12", "name": "c/12h", "labelListVisibility": "labelShowIfUnread"},
+            {"id": "LU", "name": "c/u", "labelListVisibility": "labelShow"},
+        ]
+        migrate_legacy_labels(service, labels)
+        service.users().labels().patch.assert_called_once_with(
+            userId="me", id="L24", body={"labelListVisibility": "labelShowIfUnread"})
+
     def test_deletes_retired_label(self):
         service = mock_service()
         labels = [{"name": "c", "id": "P"}, {"name": "c/0h", "id": "L0"}, {"name": "c/1h", "id": "L1"}]

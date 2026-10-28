@@ -12,6 +12,7 @@ sweep twice is harmless.
 """
 
 import logging
+import math
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
@@ -22,7 +23,7 @@ from claven.core.gmail import (
     batch_remove_labels,
     gmail_retry,
 )
-from claven.core.labels import LEGACY_NAMES, RETIRED_NAMES
+from claven.core.labels import COUNTDOWN_LABELS, COUNTDOWN_MAX_HOURS, LEGACY_NAMES, RETIRED_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +34,9 @@ INBOX_MODES = ("label_only", "gatekeeper", "sunset")
 SUNSET_HOURS_CHOICES = (4, 12, 24, 72)
 DEFAULT_SUNSET_HOURS = 24
 
-# Countdown labels on mail waiting in Sunset. A label names the smallest step
-# the time left fits in, so "c/4h" means the mail is gone within 4 hours, and
-# fresh mail shows the full timer the user picked.
-COUNTDOWN_STEPS = ((72, "3d"), (24, "24h"), (12, "12h"), (4, "4h"), (1, "1h"))
-COUNTDOWN_LABELS = tuple(f"c/{name}" for _, name in COUNTDOWN_STEPS)
+# Countdown labels on mail waiting in Sunset, one per hour: "c/4h" means the
+# mail is gone within 4 hours. Fresh mail shows the full timer the user picked
+# for its first hour, so a step down means the mail has sat through an hour.
 # Older countdown names, still deleted when a user leaves Sunset.
 _OLD_COUNTDOWN_LABELS = (
     tuple(old for old, new in LEGACY_NAMES.items() if new in COUNTDOWN_LABELS) + tuple(RETIRED_NAMES)
@@ -59,7 +58,7 @@ def sunset_cutoff(now: datetime, sunset_hours: int, mode_changed_at: datetime | 
     return now - timer
 
 
-def unknown_group(unknown_label: str, countdown_labels=COUNTDOWN_LABELS) -> str:
+def unknown_group(unknown_label: str, countdown_labels) -> str:
     """Gmail search term for unknown-sender mail: the unknown label or any countdown label.
 
     Pass only countdown labels that exist, so the search never names a missing label.
@@ -71,14 +70,25 @@ def unknown_group(unknown_label: str, countdown_labels=COUNTDOWN_LABELS) -> str:
     return "{" + " ".join(f"label:{name}" for name in names) + "}"
 
 
-def sunset_query(unknown_label: str, cutoff: datetime) -> str:
+def sunset_query(unknown_label: str, cutoff: datetime, countdown_labels) -> str:
     """Gmail search for unknown-sender inbox mail that has expired unread."""
-    return f"{waiting_query(unknown_label)} before:{int(cutoff.timestamp())}"
+    return f"{waiting_query(unknown_label, countdown_labels)} before:{int(cutoff.timestamp())}"
 
 
-def waiting_query(unknown_label: str) -> str:
+def waiting_query(unknown_label: str, countdown_labels) -> str:
     """Gmail search for unknown-sender mail still waiting in the inbox."""
-    return f"in:inbox is:unread -is:starred {unknown_group(unknown_label)}"
+    return f"in:inbox is:unread -is:starred {unknown_group(unknown_label, countdown_labels)}"
+
+
+def stale_query(countdown_labels) -> str:
+    """Gmail search for countdown-labeled mail that stopped waiting: archived, read, or starred."""
+    group = "{" + " ".join(f"label:{name}" for name in countdown_labels) + "}"
+    return f"{group} {{-in:inbox is:read is:starred}}"
+
+
+def countdown_labels_for(sunset_hours: int) -> tuple[str, ...]:
+    """The countdown labels a timer uses, longest first."""
+    return COUNTDOWN_LABELS[COUNTDOWN_MAX_HOURS - sunset_hours:]
 
 
 def existing_countdown_ids(service) -> dict[str, str]:
@@ -103,13 +113,21 @@ def _list_ids(service, **query) -> list[str]:
         logger.debug("_list_ids: fetching next page")
 
 
-def countdown_label(remaining: timedelta) -> str:
-    """Countdown label for the time left, rounded up to a step ("gone within")."""
-    for (hours, name), (next_hours, _) in zip(COUNTDOWN_STEPS, COUNTDOWN_STEPS[1:]):
-        if remaining > timedelta(hours=next_hours):
-            return f"c/{name}"
-    logger.debug("countdown_label: %s left, within the last step", remaining)
-    return f"c/{COUNTDOWN_STEPS[-1][1]}"
+def _is_waiting(labels) -> bool:
+    """Whether a message is unread and unstarred in the inbox."""
+    return {"INBOX", "UNREAD"} <= set(labels) and "STARRED" not in labels
+
+
+def countdown_label(remaining: timedelta, max_hours: int = COUNTDOWN_MAX_HOURS) -> str:
+    """Countdown label for the time left, rounded up to the hour ("gone within"), at most max_hours."""
+    hours = math.ceil(remaining.total_seconds() / 3600)
+    if hours < 1:
+        logger.debug("countdown_label: %s left, overdue: last hour", remaining)
+        return "c/1h"
+    if hours > max_hours:
+        logger.debug("countdown_label: %s left, beyond the %dh timer", remaining, max_hours)
+        return f"c/{max_hours}h"
+    return f"c/{hours}h"
 
 
 def message_expiry(internal_date_ms: int, sunset_hours: int, mode_changed_at: datetime | None) -> datetime:
@@ -125,7 +143,7 @@ def arrival_countdown(internal_date_ms: int, sunset_hours: int, mode_changed_at:
                       now: datetime | None = None) -> str:
     """Countdown label for a message being labeled right now."""
     now = now or datetime.now(timezone.utc)
-    return countdown_label(message_expiry(internal_date_ms, sunset_hours, mode_changed_at) - now)
+    return countdown_label(message_expiry(internal_date_ms, sunset_hours, mode_changed_at) - now, sunset_hours)
 
 
 def update_countdowns(service, unknown_label: str, unknown_label_id: str, now: datetime, sunset_hours: int,
@@ -133,12 +151,15 @@ def update_countdowns(service, unknown_label: str, unknown_label_id: str, now: d
     """Put the right countdown label, in place of the unknown label, on each waiting
     message; put the unknown label back on mail that stopped waiting.
 
-    label_ids maps each name in COUNTDOWN_LABELS to its Gmail label id.
-    Returns the number of waiting messages whose labels changed.
+    label_ids maps each countdown label in the mailbox to its Gmail label id,
+    including every hour of the user's timer. Searches can return other mail in
+    the same thread, so only messages carrying the unknown or a countdown label
+    are changed. Returns the number of waiting messages whose labels changed.
     """
+    names = [name for name in COUNTDOWN_LABELS if name in label_ids]
     countdown_ids = set(label_ids.values())
     marker_ids = countdown_ids | {unknown_label_id}
-    waiting = _list_ids(service, q=waiting_query(unknown_label))
+    waiting = _list_ids(service, q=waiting_query(unknown_label, names))
 
     to_step = defaultdict(list)
     for i in range(0, len(waiting), _BATCH_LIMIT):
@@ -147,8 +168,11 @@ def update_countdowns(service, unknown_label: str, unknown_label_id: str, now: d
             if internal_date_ms is None:
                 logger.debug("update_countdowns: %s has no date, skipping", message_id)
                 continue
+            if not set(labels) & marker_ids or not _is_waiting(labels):
+                logger.debug("update_countdowns: %s matched by its thread only, skipping", message_id)
+                continue
             remaining = message_expiry(internal_date_ms, sunset_hours, mode_changed_at) - now
-            want = label_ids[countdown_label(remaining)]
+            want = label_ids[countdown_label(remaining, sunset_hours)]
             if set(labels) & marker_ids != {want}:
                 to_step[want].append(message_id)
             else:
@@ -160,10 +184,12 @@ def update_countdowns(service, unknown_label: str, unknown_label_id: str, now: d
         changed += len(ids)
 
     # Read, starred, or archived mail no longer waits: back to the unknown label.
-    waiting_set = set(waiting)
+    candidates = _list_ids(service, q=stale_query(names)) if names else []
     stale = set()
-    for label_id in countdown_ids:
-        stale.update(m for m in _list_ids(service, labelIds=[label_id]) if m not in waiting_set)
+    for i in range(0, len(candidates), _BATCH_LIMIT):
+        metadata = batch_get_message_metadata(service, candidates[i:i + _BATCH_LIMIT], ["From"])
+        stale.update(m for m, (_headers, labels, _date) in metadata.items()
+                     if set(labels) & countdown_ids and not _is_waiting(labels))
     if stale:
         logger.debug("update_countdowns: clearing countdown from %d messages", len(stale))
         batch_modify_labels(service, sorted(stale), add_label_ids=[unknown_label_id],
@@ -197,9 +223,12 @@ def clear_countdowns(service, unknown_label_id: str) -> int:
     return deleted
 
 
-def archive_expired_unknown(service, unknown_label: str, cutoff: datetime) -> int:
-    """Archive (remove INBOX from) expired unknown-sender mail. Returns the count archived."""
-    query = sunset_query(unknown_label, cutoff)
+def archive_expired_unknown(service, unknown_label: str, cutoff: datetime, countdown_labels) -> int:
+    """Archive (remove INBOX from) expired unknown-sender mail. Returns the count archived.
+
+    countdown_labels: the countdown labels in the mailbox (waiting mail carries one instead of c/u).
+    """
+    query = sunset_query(unknown_label, cutoff, countdown_labels)
     message_ids = []
     page_token = None
     while True:

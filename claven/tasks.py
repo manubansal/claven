@@ -18,7 +18,7 @@ import time as _time
 from datetime import datetime, timezone, timedelta
 
 import claven.server as _srv
-from claven.core.sunset import COUNTDOWN_LABELS, existing_countdown_ids
+from claven.core.sunset import COUNTDOWN_LABELS, countdown_labels_for, existing_countdown_ids
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,7 @@ def _sunset_for_live_labeling(service, conn, user_id: str) -> dict | None:
     if inbox_mode["mode"] != "sunset":
         logger.debug("_sunset_for_live_labeling: %s in %s mode, no countdowns", user_id, inbox_mode["mode"])
         return None
-    label_ids = _srv.build_label_id_cache(service, list(COUNTDOWN_LABELS))
+    label_ids = _srv.build_label_id_cache(service, list(countdown_labels_for(inbox_mode["sunset_hours"])))
     # Countdown labels may exist from here on; leaving Sunset must clean them up.
     _srv.db.set_sunset_countdown_active(conn, user_id, True)
     logger.debug("_sunset_for_live_labeling: %s in Sunset (%dh)", user_id, inbox_mode["sunset_hours"])
