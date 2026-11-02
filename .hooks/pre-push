@@ -1,3 +1,25 @@
 #!/bin/sh
 # Run tests before pushing. Exit non-zero to abort the push.
-pytest --tb=short -q
+#
+# - Uses the repo's .venv when there is one (git runs hooks without it activated).
+# - Skips live tests: they share one Gmail test inbox with CI (see CLAUDE.md).
+# - Runs integration tests when .env.test sets PYTEST_DATABASE_URL.
+# - Caps memory where systemd-run is available, so a runaway test can't
+#   take the machine down.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+if [ -x .venv/bin/pytest ]; then
+    PATH="$PWD/.venv/bin:$PATH"
+    export PATH
+fi
+
+if [ -z "$PYTEST_DATABASE_URL" ] && [ -f .env.test ]; then
+    PYTEST_DATABASE_URL=$(sed -n 's/^PYTEST_DATABASE_URL=//p' .env.test)
+    export PYTEST_DATABASE_URL
+fi
+
+set -- pytest --tb=short -q -m "not live" -p no:cacheprovider
+if command -v systemd-run >/dev/null 2>&1 && systemd-run --user --scope -q true 2>/dev/null; then
+    set -- systemd-run --user --scope -q -p MemoryMax=3G -p MemorySwapMax=0 env PATH="$PATH" "$@"
+fi
+exec "$@"

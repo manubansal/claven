@@ -39,7 +39,7 @@ setup:
 	pip install -r requirements.txt -r requirements-dev.txt
 
 test:
-	pytest --tb=short -q
+	pytest --tb=short -q -m "not live"
 
 # Run the full CI workflow locally via act (requires Docker + act).
 # Reads secrets from .secrets -- copy .secrets.example and fill in values first.
