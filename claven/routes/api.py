@@ -9,9 +9,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 import claven.server as _srv
-from claven.core.gmail import migrate_legacy_labels
 from claven.core.health import HEALTH_CODES
-from claven.core.labels import KNOWN, LEGACY_NAMES
+from claven.core.labels import KNOWN
 from claven.core.sunset import COUNTDOWN_LABELS
 from claven.routes.auth import _get_session
 
@@ -44,7 +43,6 @@ def api_me(request: Request):
         last_fetched_at = _srv.db.get_last_fetched_at(conn, session["user_id"])
         scan_scope = _srv.db.get_scan_scope(conn, session["user_id"])
         inbox_mode = _srv.db.get_inbox_mode(conn, session["user_id"])
-        auto_archive_unknown = inbox_mode["mode"] == "gatekeeper"
 
         unread_count = None
         read_count = None
@@ -92,11 +90,6 @@ def api_me(request: Request):
             sent_total_live = b1.get("sent", {}).get("messagesTotal")
 
             all_gmail_labels = b1.get("labels", {}).get("labels", [])
-            if LEGACY_NAMES.keys() & {l["name"] for l in all_gmail_labels}:
-                logger.debug("api_me: renaming labels from an older Claven version")
-                all_gmail_labels = migrate_legacy_labels(service, all_gmail_labels)
-            else:
-                logger.debug("api_me: labels already current")
             label_id_by_name = {l["name"]: l["id"] for l in all_gmail_labels}
             # In Sunset, waiting unknown-sender mail carries a countdown label instead of the
             # unknown label. Up to 72 of them, so they are counted with labels.get only.
@@ -377,7 +370,6 @@ def api_me(request: Request):
         "reset_sent_job": reset_sent_job,
         "recent_events": recent_events,
         "scan_scope": scan_scope,
-        "auto_archive_unknown": auto_archive_unknown,
         "inbox_mode": inbox_mode["mode"],
         "sunset_hours": inbox_mode["sunset_hours"],
         "cancel_state": cancel_state,
@@ -576,20 +568,6 @@ async def api_set_scan_scope(request: Request):
             _srv.db.log_event(conn, session["user_id"], "setting", f"Scan scope changed to {scope}")
             logger.debug("api_set_scan_scope: %s → %s, reset inbox_scan_status", old_scope, scope)
     return JSONResponse({"ok": True, "scan_scope": scope})
-
-
-@router.post("/api/settings/auto-archive")
-async def api_set_auto_archive(request: Request):
-    """Enable or disable auto-archive for unknown-sender messages."""
-    session = _get_session(request)
-    body = await request.json()
-    enabled = body.get("enabled")
-    if not isinstance(enabled, bool):
-        raise HTTPException(status_code=400, detail="enabled must be true or false")
-    with _srv.db.get_connection() as conn:
-        _srv.db.set_auto_archive_unknown(conn, session["user_id"], enabled)
-        _srv.db.log_event(conn, session["user_id"], "setting", f"Auto-archive unknown-sender {'enabled' if enabled else 'disabled'}")
-    return JSONResponse({"ok": True, "auto_archive_unknown": enabled})
 
 
 _INBOX_MODE_NAMES = {"label_only": "Label only", "gatekeeper": "Gatekeeper", "sunset": "Sunset"}

@@ -336,13 +336,17 @@ class TestInboxMode:
         db.set_inbox_mode(db_conn, user_id, "gatekeeper")
         assert db.get_auto_archive_unknown(db_conn, user_id) is True
 
-    def test_set_auto_archive_maps_to_modes(self, db_conn):
+    def test_set_inbox_mode_leaves_the_retired_column_alone(self, db_conn):
+        # auto_archive_unknown is unused and about to be dropped; nothing writes it.
         user_id = db.upsert_user(db_conn, "mode-legacy@example.com")
         db.set_history_id(db_conn, user_id, 1)
-        db.set_auto_archive_unknown(db_conn, user_id, False)
-        assert db.get_inbox_mode(db_conn, user_id)["mode"] == "label_only"
-        db.set_auto_archive_unknown(db_conn, user_id, True)
-        assert db.get_inbox_mode(db_conn, user_id)["mode"] == "gatekeeper"
+        with db_conn.cursor() as cur:
+            cur.execute("UPDATE scan_state SET auto_archive_unknown = false WHERE user_id = %s", (user_id,))
+        db.set_inbox_mode(db_conn, user_id, "gatekeeper")
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT auto_archive_unknown FROM scan_state WHERE user_id = %s", (user_id,))
+            assert cur.fetchone()[0] is False
+        assert not hasattr(db, "set_auto_archive_unknown")
 
     def test_get_sunset_users(self, db_conn):
         sunset_id = db.upsert_user(db_conn, "mode-list-sunset@example.com")

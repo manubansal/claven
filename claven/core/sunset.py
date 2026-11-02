@@ -23,7 +23,7 @@ from claven.core.gmail import (
     batch_remove_labels,
     gmail_retry,
 )
-from claven.core.labels import COUNTDOWN_LABELS, COUNTDOWN_MAX_HOURS, LEGACY_NAMES, RETIRED_NAMES
+from claven.core.labels import COUNTDOWN_LABELS, COUNTDOWN_MAX_HOURS
 
 logger = logging.getLogger(__name__)
 
@@ -37,10 +37,6 @@ DEFAULT_SUNSET_HOURS = 24
 # Countdown labels on mail waiting in Sunset, one per hour: "c/4h" means the
 # mail is gone within 4 hours. Fresh mail shows the full timer the user picked
 # for its first hour, so a step down means the mail has sat through an hour.
-# Older countdown names, still deleted when a user leaves Sunset.
-_OLD_COUNTDOWN_LABELS = (
-    tuple(old for old, new in LEGACY_NAMES.items() if new in COUNTDOWN_LABELS) + tuple(RETIRED_NAMES)
-)
 
 
 def sunset_cutoff(now: datetime, sunset_hours: int, mode_changed_at: datetime | None) -> datetime | None:
@@ -209,7 +205,7 @@ def clear_countdowns(service, unknown_label_id: str) -> int:
     labels = gmail_retry(lambda: service.users().labels().list(userId="me").execute()).get("labels", [])
     deleted = 0
     for label in labels:
-        if label["name"] in COUNTDOWN_LABELS or label["name"] in _OLD_COUNTDOWN_LABELS:
+        if label["name"] in COUNTDOWN_LABELS:
             message_ids = _list_ids(service, labelIds=[label["id"]])
             if message_ids:
                 logger.debug("clear_countdowns: %d messages on %s go back to unknown", len(message_ids), label["name"])

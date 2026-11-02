@@ -7,7 +7,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from claven.core.labels import LEGACY_NAMES, RETIRED_NAMES, label_body, managed_visibility
+from claven.core.labels import label_body, managed_visibility
 
 logger = logging.getLogger(__name__)
 
@@ -184,43 +184,11 @@ def _create_label(service, name: str, labels: list[dict]) -> str:
     return created["id"]
 
 
-def migrate_legacy_labels(service, labels: list[dict]) -> list[dict]:
-    """Rename labels from older Claven versions to their current names, in place,
-    and delete labels Claven no longer uses.
-
-    Renaming keeps the label on every message, so nothing has to be relabeled.
-    A label is left alone if its new name is already taken. Labels whose
-    visibility Claven manages (c/s hidden, countdowns listed only while unread)
-    get it re-applied if it differs. Returns the label list with the renames applied.
+def enforce_label_visibility(service, labels: list[dict]) -> list[dict]:
+    """Re-apply the visibility Claven manages (c/s hidden, c listed only while
+    unread) to labels where it differs. Returns the label list as updated.
     """
     labels = list(labels)
-    for label in [l for l in labels if l["name"] in RETIRED_NAMES]:
-        gmail_retry(lambda lid=label["id"]: service.users().labels().delete(userId="me", id=lid).execute())
-        logger.info("Deleted retired Gmail label %s (id: %s)", label["name"], label["id"])
-        labels.remove(label)
-    names = {l["name"] for l in labels}
-    for label in list(labels):
-        new_name = LEGACY_NAMES.get(label["name"])
-        if new_name is None:
-            logger.debug("migrate_legacy_labels: %s is current, keeping", label["name"])
-            continue
-        if new_name in names:
-            logger.warning("Not renaming label %s: %s already exists", label["name"], new_name)
-            continue
-        parent = new_name.rsplit("/", 1)[0]
-        if parent.lower() not in {n.lower() for n in names}:
-            logger.debug("migrate_legacy_labels: creating parent %s", parent)
-            _create_label(service, parent, labels)
-            names.add(parent)
-        else:
-            logger.debug("migrate_legacy_labels: parent %s exists", parent)
-        _style_label(service, new_name,
-                     lambda b, lid=label["id"]: service.users().labels().patch(userId="me", id=lid, body=b))
-        logger.info("Renamed Gmail label %s to %s (id: %s)", label["name"], new_name, label["id"])
-        # The patch above applied the label's full style, visibility included.
-        labels[labels.index(label)] = {**label, "name": new_name, **managed_visibility(new_name)}
-        names.discard(label["name"])
-        names.add(new_name)
     for i, label in enumerate(labels):
         body = managed_visibility(label["name"])
         if all(label.get(key) == value for key, value in body.items()):
@@ -231,14 +199,14 @@ def migrate_legacy_labels(service, labels: list[dict]) -> list[dict]:
     return labels
 
 
-def _list_labels_migrated(service) -> list[dict]:
+def _list_labels(service) -> list[dict]:
     labels = gmail_retry(lambda: service.users().labels().list(userId="me").execute()).get("labels", [])
-    return migrate_legacy_labels(service, labels)
+    return enforce_label_visibility(service, labels)
 
 
 def build_label_id_cache(service, label_names: list[str]) -> dict[str, str]:
-    """Return a {label_name: gmail_label_id} map, renaming old labels and creating missing ones."""
-    labels = _list_labels_migrated(service)
+    """Return a {label_name: gmail_label_id} map, creating missing labels."""
+    labels = _list_labels(service)
     existing = {l["name"]: l["id"] for l in labels}
     cache = {}
     for name in label_names:
@@ -251,8 +219,8 @@ def build_label_id_cache(service, label_names: list[str]) -> dict[str, str]:
 
 
 def ensure_label_exists(service, label_name):
-    """Create a label if it doesn't exist (renaming an old Claven label first). Returns the label ID."""
-    labels = _list_labels_migrated(service)
+    """Create a label if it doesn't exist. Returns the label ID."""
+    labels = _list_labels(service)
     for label in labels:
         if label["name"].lower() == label_name.lower():
             return label["id"]

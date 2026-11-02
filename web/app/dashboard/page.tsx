@@ -44,7 +44,6 @@ type MeResponse = {
   recent_events: { timestamp: string; event_type: string; message: string }[];
   reset_sent_job: { job_id: string; status: string; total: number | null; progress: number | null } | null;
   scan_scope: "inbox" | "allmail" | null;
-  auto_archive_unknown: boolean;
   inbox_mode?: InboxMode;
   sunset_hours?: number;
   cancel_state: string | null;
@@ -382,7 +381,6 @@ export default function DashboardPage() {
             data: {
               ...prev.data,
               inbox_mode: mode,
-              auto_archive_unknown: mode === "gatekeeper",
               ...(sunsetHours !== undefined ? { sunset_hours: sunsetHours } : {}),
             },
           }
@@ -604,8 +602,7 @@ export default function DashboardPage() {
                         : severity === "warning" ? "filter-warning-icon"
                         : severity === "success" ? "filter-complete-icon"
                         : "filter-waiting-icon";
-                      const inboxMode: InboxMode = state.data.inbox_mode
-                        ?? (state.data.auto_archive_unknown ? "gatekeeper" : "label_only");
+                      const inboxMode: InboxMode = state.data.inbox_mode ?? "label_only";
                       const unknownCountLabel = (
                         <>
                           Inbox unknown-sender
