@@ -289,6 +289,62 @@ class TestHealthz:
         assert response.status_code == 503
         assert response.json()["db"] == "unreachable"
 
+    def test_unreachable_db_error_is_not_returned(self):
+        # Unauthenticated endpoint: the error text (hosts, users) stays in the logs.
+        with patch("claven.server.db") as mock_db:
+            mock_db.get_connection.side_effect = Exception("could not connect to db.internal as claven_app")
+            with TestClient(app) as client:
+                response = client.get("/healthz")
+        assert "claven_app" not in response.text
+        assert "detail" not in response.json()
+
+
+class TestSecurityHeaders:
+    """Headers a security scan expects on every API response."""
+
+    _EVERYWHERE = {
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+        "referrer-policy": "no-referrer",
+    }
+
+    @pytest.mark.parametrize("path", ["/health", "/api/me", "/api/config", "/oauth/start", "/nonexistent"])
+    def test_on_every_response(self, path):
+        with patch.dict("os.environ", _ENV), TestClient(app) as client:
+            response = client.get(path, follow_redirects=False)
+        for name, value in self._EVERYWHERE.items():
+            assert response.headers.get(name) == value, (path, name)
+
+    @pytest.mark.parametrize("path", ["/api/me", "/api/config", "/oauth/start"])
+    def test_api_and_oauth_responses_are_not_cached(self, path):
+        with patch.dict("os.environ", _ENV), TestClient(app) as client:
+            response = client.get(path, follow_redirects=False)
+        assert response.headers.get("cache-control") == "no-store"
+
+    def test_on_cors_preflight(self):
+        with TestClient(app) as client:
+            response = client.options("/api/me", headers={
+                "Origin": "https://claven.app", "Access-Control-Request-Method": "GET"})
+        assert response.headers.get("x-content-type-options") == "nosniff"
+
+    def test_event_stream_still_streams_with_headers(self):
+        # The headers are added as the response starts, so the SSE stream isn't buffered.
+        token = _make_session_token()
+        with patch.dict("os.environ", {**_ENV, "DATABASE_URL": "postgresql://pooled"}), \
+                patch("claven.routes.auth._current_session_version", return_value=0), \
+                patch("psycopg2.connect", side_effect=RuntimeError("no db")):
+            with TestClient(app) as client:
+                client.cookies.set("session", token)
+                response = client.get("/api/events")
+        assert response.headers.get("x-content-type-options") == "nosniff"
+
+    @pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+    def test_api_docs_are_not_served(self, path):
+        with TestClient(app) as client:
+            assert client.get(path).status_code == 404
+
 
 class TestOAuthStart:
     def test_redirects_to_google(self):
