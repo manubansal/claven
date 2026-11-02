@@ -24,7 +24,7 @@ After cloning, run once to install dependencies and activate git hooks:
 make setup
 ```
 
-This installs `requirements.txt` and `requirements-dev.txt`, and configures git to use the committed hooks in `.hooks/`. The pre-push hook runs the full test suite before every push — the push is aborted if any tests fail.
+This installs `requirements.txt` and `requirements-dev.txt`, and configures git to use the committed hooks in `.hooks/`. The pre-push hook runs the test suite (all but `live` tests, using `.venv` and `.env.test` when present) before every push — the push is aborted if any tests fail.
 
 To run tests manually:
 
