@@ -299,6 +299,30 @@ class TestClearCountdowns:
         mock_modify.assert_called_once_with(service, ["m1", "m2"], add_label_ids=["X"])
 
 
+class TestClearCountdownsKeep:
+    def test_keeps_the_labels_in_use(self):
+        # Shortening the timer (72h to 24h) leaves c/72h … c/25h unused.
+        service = MagicMock()
+        service.users().labels().list().execute.return_value = {"labels": [
+            {"id": "L72", "name": "c/72h"},
+            {"id": "L24", "name": "c/24h"},
+            {"id": "L1", "name": "c/1h"},
+            {"id": "X", "name": "c/u"},
+        ]}
+        _ids_by(service, {})
+        with patch("claven.core.sunset.batch_modify_labels"):
+            assert clear_countdowns(service, "X", keep=("c/24h", "c/1h")) == 1
+        service.users().labels().delete.assert_called_once_with(userId="me", id="L72")
+
+    def test_mail_left_on_an_unused_label_goes_back_to_unknown(self):
+        service = MagicMock()
+        service.users().labels().list().execute.return_value = {"labels": [{"id": "L72", "name": "c/72h"}]}
+        _ids_by(service, {("L72",): ["m1"]})
+        with patch("claven.core.sunset.batch_modify_labels") as mock_modify:
+            clear_countdowns(service, "X", keep=("c/24h",))
+        mock_modify.assert_called_once_with(service, ["m1"], add_label_ids=["X"])
+
+
 class TestExistingCountdownIds:
     def test_returns_only_countdown_labels_that_exist(self):
         from claven.core.sunset import existing_countdown_ids

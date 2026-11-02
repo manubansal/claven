@@ -197,15 +197,17 @@ def update_countdowns(service, unknown_label: str, unknown_label_id: str, now: d
     return changed
 
 
-def clear_countdowns(service, unknown_label_id: str) -> int:
+def clear_countdowns(service, unknown_label_id: str, keep=()) -> int:
     """Delete Claven's countdown labels, putting the unknown label back on their mail first.
 
-    Used after a user leaves Sunset. Returns the number of labels deleted.
+    Used after a user leaves Sunset, and with keep (the labels the user's timer
+    uses) to remove hours left over from a longer timer. Returns the number of
+    labels deleted.
     """
     labels = gmail_retry(lambda: service.users().labels().list(userId="me").execute()).get("labels", [])
     deleted = 0
     for label in labels:
-        if label["name"] in COUNTDOWN_LABELS:
+        if label["name"] in COUNTDOWN_LABELS and label["name"] not in keep:
             message_ids = _list_ids(service, labelIds=[label["id"]])
             if message_ids:
                 logger.debug("clear_countdowns: %d messages on %s go back to unknown", len(message_ids), label["name"])
