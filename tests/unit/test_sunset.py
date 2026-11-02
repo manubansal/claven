@@ -298,17 +298,6 @@ class TestClearCountdowns:
             clear_countdowns(service, "X")
         mock_modify.assert_called_once_with(service, ["m1", "m2"], add_label_ids=["X"])
 
-    def test_also_deletes_countdown_labels_with_old_names(self):
-        service = MagicMock()
-        service.users().labels().list().execute.return_value = {"labels": [
-            {"id": "L3", "name": "c/3d"},
-            {"id": "L9", "name": "c/12h"},
-            {"id": "X", "name": "c/u"},
-        ]}
-        _ids_by(service, {})
-        with patch("claven.core.sunset.batch_modify_labels"):
-            assert clear_countdowns(service, "X") == 2
-
 
 class TestExistingCountdownIds:
     def test_returns_only_countdown_labels_that_exist(self):

@@ -1,10 +1,10 @@
-"""Claven's Gmail labels: short codes under c/, their colours, and renames from older names.
+"""Claven's Gmail labels: short codes under c/ and their colours.
 
+c     parent; listed in the sidebar only while a label under it has unread mail
 c/k   known sender (green)
 c/u   unknown sender (grey)
 c/72h … c/1h  Sunset countdown, hourly ("gone within"), in place of c/u while mail
-              waits; calm to urgent: blue, yellow, orange, red; listed in the
-              sidebar only while they have unread mail
+              waits; calm to urgent: blue, yellow, orange, red
 c/s   sent mail already scanned for known senders (hidden)
 """
 
@@ -55,38 +55,21 @@ LABEL_COLORS = {
     **{f"c/{hours}h": _countdown_color(hours) for hours in range(COUNTDOWN_MAX_HOURS, 0, -1)},
 }
 
-# Up to 72 countdown labels: list only those with unread mail in the sidebar.
-COUNTDOWN_LIST_VISIBILITY = "labelShowIfUnread"
-
-# Names used by earlier Claven versions. Renaming in place keeps the label on
-# every message that already has it.
-LEGACY_NAMES = {
-    "known-sender": KNOWN,
-    "unknown-sender": UNKNOWN,
-    "claven/sent-scanned": SENT_SCANNED,
-    "sunset/3d left": "c/72h",
-    "c/3d": "c/72h",
-    "sunset/24h left": "c/24h",
-    "sunset/12h left": "c/12h",
-    "sunset/4h left": "c/4h",
-    "sunset/1h left": "c/1h",
-}
-
-# Labels Claven no longer uses; deleted (which removes them from every message).
-# The Sunset sweep puts the right countdown back on mail that had one.
-RETIRED_NAMES = {"c/0h", "sunset/under 1h left"}
+# Gmail lists nested labels by their parent's sidebar setting and ignores their
+# own, so the up to 72 countdown labels are kept out of the way through c.
+PARENT_LIST_VISIBILITY = "labelShowIfUnread"
 
 
 def managed_visibility(name: str) -> dict:
     """Visibility Claven keeps on an existing label, re-applied if it drifts. Empty if none.
 
     c/s must stay hidden (it marks scanned sent mail, so it would show on every
-    thread you replied to); countdown labels are listed only while unread.
+    thread you replied to); c is listed only while it has unread mail.
     """
     if name == SENT_SCANNED:
         return {"labelListVisibility": "labelHide", "messageListVisibility": "hide"}
-    if name in COUNTDOWN_LABELS:
-        return {"labelListVisibility": COUNTDOWN_LIST_VISIBILITY}
+    if name == PARENT:
+        return {"labelListVisibility": PARENT_LIST_VISIBILITY}
     return {}
 
 
@@ -96,9 +79,7 @@ def label_body(name: str) -> dict:
     if name == SENT_SCANNED:
         body.update(labelListVisibility="labelHide", messageListVisibility="hide")
     elif name == PARENT:
-        body["messageListVisibility"] = "hide"
-    elif name in COUNTDOWN_LABELS:
-        body["labelListVisibility"] = COUNTDOWN_LIST_VISIBILITY
+        body.update(labelListVisibility=PARENT_LIST_VISIBILITY, messageListVisibility="hide")
     if name in LABEL_COLORS:
         body["color"] = LABEL_COLORS[name]
     return body

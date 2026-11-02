@@ -634,12 +634,12 @@ class TestBatchModifyLabels:
 
 
 # ---------------------------------------------------------------------------
-# build_label_id_cache / migrate_legacy_labels
+# build_label_id_cache / enforce_label_visibility
 # ---------------------------------------------------------------------------
 
 from googleapiclient.errors import HttpError
 
-from claven.core.gmail import build_label_id_cache, migrate_legacy_labels
+from claven.core.gmail import build_label_id_cache, enforce_label_visibility
 from claven.core.labels import LABEL_COLORS, label_body
 
 
@@ -648,92 +648,57 @@ def _http_error(status):
     return HttpError(resp, b"{}")
 
 
-class TestMigrateLegacyLabels:
-    def test_renames_old_label_in_place_with_style(self):
-        service = mock_service()
-        labels = [{"name": "c", "id": "P"}, {"name": "unknown-sender", "id": "Label_7"}]
-        result = migrate_legacy_labels(service, labels)
-        service.users().labels().patch.assert_called_once_with(
-            userId="me", id="Label_7", body=label_body("c/u"))
-        assert {"name": "c/u", "id": "Label_7"} in result
-        assert not any(l["name"] == "unknown-sender" for l in result)
-
-    def test_creates_parent_before_renaming(self):
-        service = mock_service()
-        service.users().labels().create().execute.return_value = {"name": "c", "id": "P"}
-        result = migrate_legacy_labels(service, [{"name": "known-sender", "id": "Label_1"}])
-        service.users().labels().create.assert_called_with(userId="me", body=label_body("c"))
-        assert {"name": "c", "id": "P"} in result
-
-    def test_leaves_old_label_alone_when_new_name_taken(self):
-        service = mock_service()
-        labels = [{"name": "c", "id": "P"}, {"name": "known-sender", "id": "L1"}, {"name": "c/k", "id": "L2"}]
-        assert migrate_legacy_labels(service, labels) == labels
-        service.users().labels().patch.assert_not_called()
-
-    def test_no_calls_when_nothing_to_migrate(self):
-        service = mock_service()
-        labels = [{"name": "c/k", "id": "L2"}, {"name": "INBOX", "id": "INBOX"}]
-        assert migrate_legacy_labels(service, labels) == labels
-        service.users().labels().patch.assert_not_called()
-        service.users().labels().create.assert_not_called()
-
-    def test_retries_without_colour_if_gmail_rejects_it(self):
-        service = mock_service()
-        patch_call = service.users().labels().patch
-        patch_call.return_value.execute.side_effect = [_http_error(400), {}]
-        migrate_legacy_labels(service, [{"name": "c", "id": "P"}, {"name": "known-sender", "id": "L1"}])
-        last_body = patch_call.call_args.kwargs["body"]
-        assert last_body["name"] == "c/k" and "color" not in last_body
-
-
-class TestRetiredLabels:
+class TestEnforceLabelVisibility:
     def test_sent_scanned_label_is_hidden_again(self):
         # c/s marks scanned sent mail; it must never show on threads you replied to.
-        from claven.core.gmail import migrate_legacy_labels
         service = mock_service()
         labels = [{"id": "LS", "name": "c/s", "labelListVisibility": "labelShow", "messageListVisibility": "show"}]
-        migrate_legacy_labels(service, labels)
+        result = enforce_label_visibility(service, labels)
         service.users().labels().patch.assert_called_once_with(
             userId="me", id="LS", body={"labelListVisibility": "labelHide", "messageListVisibility": "hide"})
+        assert result[0]["labelListVisibility"] == "labelHide"
 
     def test_hidden_sent_scanned_label_is_left_alone(self):
-        from claven.core.gmail import migrate_legacy_labels
         service = mock_service()
         labels = [{"id": "LS", "name": "c/s", "labelListVisibility": "labelHide", "messageListVisibility": "hide"}]
-        migrate_legacy_labels(service, labels)
+        assert enforce_label_visibility(service, labels) == labels
         service.users().labels().patch.assert_not_called()
 
-    def test_countdown_labels_switch_to_show_if_unread(self):
-        from claven.core.gmail import migrate_legacy_labels
+    def test_parent_switches_to_show_if_unread(self):
         service = mock_service()
         labels = [
+            {"id": "P", "name": "c", "labelListVisibility": "labelShow"},
             {"id": "L24", "name": "c/24h", "labelListVisibility": "labelShow"},
-            {"id": "L12", "name": "c/12h", "labelListVisibility": "labelShowIfUnread"},
             {"id": "LU", "name": "c/u", "labelListVisibility": "labelShow"},
         ]
-        migrate_legacy_labels(service, labels)
+        enforce_label_visibility(service, labels)
         service.users().labels().patch.assert_called_once_with(
-            userId="me", id="L24", body={"labelListVisibility": "labelShowIfUnread"})
+            userId="me", id="P", body={"labelListVisibility": "labelShowIfUnread"})
 
-    def test_deletes_retired_label(self):
+    def test_no_calls_when_current(self):
         service = mock_service()
-        labels = [{"name": "c", "id": "P"}, {"name": "c/0h", "id": "L0"}, {"name": "c/1h", "id": "L1"}]
-        result = migrate_legacy_labels(service, labels)
-        service.users().labels().delete.assert_called_once_with(userId="me", id="L0")
-        assert [l["name"] for l in result] == ["c", "c/1h"]
+        labels = [{"id": "P", "name": "c", "labelListVisibility": "labelShowIfUnread"},
+                  {"id": "L2", "name": "c/k"}, {"id": "INBOX", "name": "INBOX"}]
+        assert enforce_label_visibility(service, labels) == labels
+        service.users().labels().patch.assert_not_called()
+        service.users().labels().create.assert_not_called()
+        service.users().labels().delete.assert_not_called()
 
-    def test_no_delete_when_nothing_retired(self):
+    def test_old_label_names_are_left_alone(self):
+        # Renames from older versions are done; an old name is now just a user label.
         service = mock_service()
-        migrate_legacy_labels(service, [{"name": "c/1h", "id": "L1"}])
+        labels = [{"id": "L1", "name": "known-sender"}, {"id": "L0", "name": "c/0h"}]
+        assert enforce_label_visibility(service, labels) == labels
+        service.users().labels().patch.assert_not_called()
         service.users().labels().delete.assert_not_called()
 
 
 class TestBuildLabelIdCache:
-    def test_uses_renamed_label_id(self):
+    def test_uses_existing_label_id(self):
         service = mock_service()
         service.users().labels().list().execute.return_value = {
-            "labels": [{"name": "c", "id": "P"}, {"name": "known-sender", "id": "Label_1"}]
+            "labels": [{"name": "c", "id": "P", "labelListVisibility": "labelShowIfUnread"},
+                       {"name": "c/k", "id": "Label_1"}]
         }
         assert build_label_id_cache(service, ["c/k"]) == {"c/k": "Label_1"}
         service.users().labels().create.assert_not_called()
@@ -765,10 +730,3 @@ def test_create_label_uses_existing_id_when_another_worker_created_it():
     assert build_label_id_cache(service, ["c/k"]) == {"c/k": "L_race"}
 
 
-def test_ensure_label_exists_renames_legacy_sent_scanned():
-    service = mock_service()
-    service.users().labels().list().execute.return_value = {
-        "labels": [{"name": "c", "id": "P"}, {"name": "claven/sent-scanned", "id": "Label_5"}]
-    }
-    assert ensure_label_exists(service, "c/s") == "Label_5"
-    service.users().labels().patch.assert_called_once_with(userId="me", id="Label_5", body=label_body("c/s"))

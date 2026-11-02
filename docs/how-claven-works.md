@@ -88,7 +88,7 @@ The thread now has both labels. This is expected behavior. Gmail shows a thread 
 
 ## Gmail labels managed by Claven
 
-Claven keeps its labels short and groups them under one `c` label in your Gmail sidebar:
+Claven keeps its labels short and groups them under one `c` label in your Gmail sidebar. The `c` group shows in the sidebar only while one of its labels has unread mail, so the hourly countdown labels stay out of the way the rest of the time:
 
 | Label | Meaning | Colour |
 |---|---|---|
@@ -100,7 +100,7 @@ Claven keeps its labels short and groups them under one `c` label in your Gmail 
 | `c/1h` | Sunset: archived within the hour | Red |
 | `c/s` | Sent message already scanned (hidden) | — |
 
-Earlier versions used longer names (`known-sender`, `unknown-sender`, `sunset/4h left`, …) and a `c/3d` step (now `c/72h`). Claven renames those in place the next time it runs, so every message keeps its label. If you change a label's colour in Gmail, Claven leaves your choice alone.
+If you change a label's colour in Gmail, Claven leaves your choice alone. It does keep `c/s` hidden and the `c` group's show-if-unread setting, and puts them back if they change.
 
 ### Labels added
 

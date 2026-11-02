@@ -1374,16 +1374,6 @@ class TestApiMe:
         # Up to 72 countdown labels: no per-label inbox listing.
         assert not any(c.get("labelIds") == ["INBOX", "Label_c4h"] for c in calls)
 
-    def test_renames_old_label_names_and_keeps_counts(self):
-        from claven.core.labels import label_body
-        svc = self._make_gmail_service(messages_total=100, labeled_known_total=60,
-                                       label_names=("claven", "known-sender", "unknown-sender"))
-        response = self._get_me(svc)
-        assert response.json()["allmail_labeled_known_count"] == 60
-        patch_calls = svc.users.return_value.labels.return_value.patch.call_args_list
-        assert ({"userId": "me", "id": self._KNOWN_LABEL_ID, "body": label_body("c/k")}
-                in [c.kwargs for c in patch_calls])
-
     def test_current_label_names_are_not_patched(self):
         svc = self._make_gmail_service(messages_total=100, labeled_known_total=60)
         response = self._get_me(svc)
@@ -2539,7 +2529,8 @@ class TestApiInboxMode:
         assert response.status_code == 200
         mock_db.set_inbox_mode.assert_called_once_with(ANY, "uid-1", "gatekeeper", sunset_hours=None)
 
-    def test_legacy_auto_archive_endpoint_still_works(self):
+    def test_auto_archive_endpoint_is_gone(self):
+        # Replaced by /api/settings/inbox-mode; the dashboard no longer calls it.
         token = _make_session_token()
         with patch.dict("os.environ", _ENV):
             with patch("claven.server.db") as mock_db:
@@ -2547,8 +2538,8 @@ class TestApiInboxMode:
                 with TestClient(app) as client:
                     client.cookies.set("session", token)
                     response = client.post("/api/settings/auto-archive", json={"enabled": True})
-        assert response.status_code == 200
-        mock_db.set_auto_archive_unknown.assert_called_once_with(ANY, "uid-1", True)
+        assert response.status_code == 404
+        mock_db.set_inbox_mode.assert_not_called()
 
     def test_api_me_returns_inbox_mode(self):
         token = _make_session_token()
@@ -2566,6 +2557,7 @@ class TestApiInboxMode:
         body = response.json()
         assert body["inbox_mode"] == "sunset"
         assert body["sunset_hours"] == 72
+        assert "auto_archive_unknown" not in body  # inbox_mode replaced it
 
 
 class TestInternalSunset:

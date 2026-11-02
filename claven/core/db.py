@@ -487,8 +487,7 @@ def set_inbox_mode(conn, user_id: str, mode: str, sunset_hours: int | None = Non
     """Set inbox_mode (and optionally the Sunset timer).
 
     inbox_mode_changed_at moves only when the mode actually changes, so
-    adjusting the timer does not restart it. auto_archive_unknown is kept in
-    sync for rollback compatibility.
+    adjusting the timer does not restart it.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -498,7 +497,6 @@ def set_inbox_mode(conn, user_id: str, mode: str, sunset_hours: int | None = Non
                                              THEN NOW() ELSE inbox_mode_changed_at END,
                 inbox_mode = %(mode)s,
                 sunset_hours = COALESCE(%(hours)s, sunset_hours),
-                auto_archive_unknown = (%(mode)s = 'gatekeeper'),
                 updated_at = NOW()
             WHERE user_id = %(user_id)s
             """,
@@ -536,11 +534,6 @@ def get_countdown_cleanup_users(conn) -> list[str]:
 def get_auto_archive_unknown(conn, user_id: str) -> bool:
     """True when unknown-sender mail is archived immediately (Gatekeeper mode)."""
     return get_inbox_mode(conn, user_id)["mode"] == "gatekeeper"
-
-
-def set_auto_archive_unknown(conn, user_id: str, enabled: bool) -> None:
-    """Legacy on/off setting: on = Gatekeeper, off = Label only."""
-    set_inbox_mode(conn, user_id, "gatekeeper" if enabled else "label_only")
 
 
 # ── Event log ─────────────────────────────────────────────────────────────────
