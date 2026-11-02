@@ -1,0 +1,16 @@
+# Weekly update PRs, so known vulnerabilities get fixed without waiting for a
+# review to find them (CASA M6). CI's pip-audit and npm audit gate the merge.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

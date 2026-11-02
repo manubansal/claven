@@ -69,12 +69,18 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
 
       - name: Install frontend dependencies
         run: npm ci
+        working-directory: web
+
+      # Fails on high or critical vulnerabilities in what ships (CASA M6);
+      # build tools are devDependencies and aren't deployed.
+      - name: Audit frontend dependencies
+        run: npm audit --omit=dev --audit-level=high
         working-directory: web
 
       - name: Run frontend tests
