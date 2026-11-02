@@ -668,7 +668,7 @@ Replaced the planned `auto_archive_unknown` boolean with a three-way per-user mo
 - [x] Countdown labels replace `c/u` while mail waits (no `c/u` + `c/24h` pair); mail goes back to `c/u` when read, starred, archived, or the user leaves Sunset. Scans, relabel, archive job and dashboard counts treat countdown labels as unknown
 - [x] `POST /api/settings/inbox-mode`; `/api/me` returns `inbox_mode`, `sunset_hours`; dashboard "Inbox mode" section with the timer dropdown
 - [x] Remove the legacy `/api/settings/auto-archive` endpoint and stop writing `scan_state.auto_archive_unknown`
-- [ ] Drop the `scan_state.auto_archive_unknown` column (a follow-up migration, once no running revision writes it)
+- [x] Drop the `scan_state.auto_archive_unknown` column (migration 0016)
 - [x] Short label codes under `c/` (`c/k`, `c/u`, `c/3d` … `c/1h`, hidden `c/s`) with traffic-light colours; old names renamed in place on the next label lookup (`claven/core/labels.py`, `migrate_legacy_labels`)
 - [x] Every user migrated: `LEGACY_NAMES`, `RETIRED_NAMES` and the rename path removed; `enforce_label_visibility` keeps only `c/s` hidden and `c` show-if-unread (nested labels follow their parent's sidebar setting, so the per-countdown setting is gone)
 
