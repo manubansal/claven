@@ -47,7 +47,7 @@ def _pubsub_payload(email="user@example.com", history_id="12345"):
 
 _PUBSUB_TOKEN = "fake-pubsub-jwt"
 _PUBSUB_HEADERS = {"Authorization": f"Bearer {_PUBSUB_TOKEN}"}
-_PUBSUB_ID_INFO = {"email": "claven-pubsub@claven-prod.iam.gserviceaccount.com"}
+_PUBSUB_ID_INFO = {"email": "claven-pubsub@claven-prod.iam.gserviceaccount.com", "email_verified": True}
 
 
 @contextmanager
@@ -68,6 +68,7 @@ def _fake_db_ctx(mock_db, conn=None):
 
     mock_db.get_connection.side_effect = _ctx
     mock_db.get_processed_count.return_value = 0
+    mock_db.get_session_version.return_value = 0
     mock_db.get_sent_scan_progress.return_value = {"messages_scanned": 0, "messages_total": None, "status": "complete", "updated_at": None}
     mock_db.is_inbox_scan_completed.return_value = False
     mock_db.get_inbox_scan_status.return_value = None
@@ -776,6 +777,39 @@ class TestWebhookGmail:
                 )
         assert response.status_code == 401
 
+    def test_other_service_account_returns_401(self):
+        # Anyone can point their own Pub/Sub subscription at the webhook; Google
+        # signs a valid token for their service account.
+        with patch("claven.server.google_id_token.verify_oauth2_token") as mock_verify:
+            mock_verify.return_value = {"email": "attacker@evil-project.iam.gserviceaccount.com", "email_verified": True}
+            with TestClient(app) as client:
+                response = client.post("/webhook/gmail", json=_pubsub_payload(), headers=_PUBSUB_HEADERS)
+        assert response.status_code == 401
+
+    def test_unverified_email_returns_401(self):
+        with patch("claven.server.google_id_token.verify_oauth2_token") as mock_verify:
+            mock_verify.return_value = {**_PUBSUB_ID_INFO, "email_verified": False}
+            with TestClient(app) as client:
+                response = client.post("/webhook/gmail", json=_pubsub_payload(), headers=_PUBSUB_HEADERS)
+        assert response.status_code == 401
+
+    def test_token_audience_is_checked(self):
+        with _mock_pubsub_token() as mock_verify, patch("claven.server.db") as mock_db:
+            _fake_db_ctx(mock_db)
+            mock_db.get_user_by_email.return_value = None
+            with TestClient(app) as client:
+                client.post("/webhook/gmail", json=_pubsub_payload(), headers=_PUBSUB_HEADERS)
+        assert mock_verify.call_args.kwargs["audience"] == "https://api.claven.app/webhook/gmail"
+
+    @pytest.mark.parametrize("missing", ["PUBSUB_AUDIENCE", "PUBSUB_PUSH_SERVICE_ACCOUNT"])
+    def test_fails_closed_when_not_configured(self, missing, monkeypatch):
+        monkeypatch.delenv(missing)
+        with _mock_pubsub_token() as mock_verify:
+            with TestClient(app) as client:
+                response = client.post("/webhook/gmail", json=_pubsub_payload(), headers=_PUBSUB_HEADERS)
+        assert response.status_code == 500
+        mock_verify.assert_not_called()
+
     def test_non_pubsub_service_account_returns_401(self):
         with patch("claven.server.google_id_token.verify_oauth2_token") as mock_verify:
             mock_verify.return_value = {"email": "attacker@gmail.com"}
@@ -1022,11 +1056,107 @@ class TestWebhookGmail:
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _make_session_token(payload: dict | None = None) -> str:
-    """Issue a real JWT signed with the test SESSION_SECRET."""
+def _make_session_token(payload: dict | None = None, **claims) -> str:
+    """Issue a real JWT signed with the test SESSION_SECRET (session version 0, valid for an hour).
+
+    Pass a claim as None to leave it out.
+    """
+    import time
     import jwt as pyjwt
-    data = payload or {"user_id": "uid-1", "email": "user@example.com"}
+    now = int(time.time())
+    data = {"user_id": "uid-1", "email": "user@example.com", "iat": now, "exp": now + 3600, "sv": 0,
+            **(payload or {}), **claims}
+    data = {k: v for k, v in data.items() if v is not None}
     return pyjwt.encode(data, _ENV["SESSION_SECRET"], algorithm="HS256")
+
+
+class TestSessionSecurity:
+    """Sessions expire, logging out revokes them, and other sites can't act with them."""
+
+    def _me(self, token, mock_db_setup=None):
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.server.db") as mock_db, patch("claven.server.auth"):
+                _fake_db_ctx(mock_db)
+                mock_db.get_user_by_id.return_value = {"id": "uid-1", "email": "user@example.com"}
+                if mock_db_setup:
+                    mock_db_setup(mock_db)
+                with TestClient(app) as client:
+                    client.cookies.set("session", token)
+                    return client.get("/api/me")
+
+    def test_valid_session_is_accepted(self):
+        assert self._me(_make_session_token()).status_code == 200
+
+    def test_expired_session_is_rejected(self):
+        import time
+        assert self._me(_make_session_token(exp=int(time.time()) - 60)).status_code == 401
+
+    def test_session_without_expiry_is_rejected(self):
+        # Tokens issued before sessions expired never do; they must not stay valid forever.
+        assert self._me(_make_session_token(exp=None)).status_code == 401
+
+    def test_session_without_version_is_rejected(self):
+        assert self._me(_make_session_token(sv=None)).status_code == 401
+
+    def test_session_from_before_logout_is_rejected(self):
+        def bumped(mock_db):
+            mock_db.get_session_version.return_value = 1
+        assert self._me(_make_session_token(sv=0), bumped).status_code == 401
+
+    def test_session_of_deleted_user_is_rejected(self):
+        def gone(mock_db):
+            mock_db.get_session_version.return_value = None
+        assert self._me(_make_session_token(), gone).status_code == 401
+
+    def test_logout_revokes_the_users_sessions(self):
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.server.db") as mock_db:
+                _fake_db_ctx(mock_db)
+                with TestClient(app) as client:
+                    client.cookies.set("session", _make_session_token())
+                    response = client.post("/api/logout")
+        assert response.status_code == 200
+        mock_db.bump_session_version.assert_called_once_with(ANY, "uid-1")
+
+    def _post_cancel(self, headers, cookie=True):
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.server.db") as mock_db:
+                _fake_db_ctx(mock_db)
+                with TestClient(app) as client:
+                    if cookie:
+                        client.cookies.set("session", _make_session_token())
+                    response = client.post("/api/actions/cancel", headers=headers)
+        return response, mock_db
+
+    def test_cross_site_post_with_cookie_is_refused(self):
+        response, mock_db = self._post_cancel({"Origin": "https://evil.example"})
+        assert response.status_code == 403
+        mock_db.get_cancel_state.assert_not_called()
+
+    def test_opaque_origin_is_refused(self):
+        response, _ = self._post_cancel({"Origin": "null"})
+        assert response.status_code == 403
+
+    def test_post_from_the_dashboard_is_allowed(self):
+        response, _ = self._post_cancel({"Origin": "https://claven.app"})
+        assert response.status_code == 200
+
+    def test_bearer_token_is_not_subject_to_origin_check(self):
+        # A bearer token is never sent by the browser on its own, so it can't be forged cross-site.
+        response, _ = self._post_cancel(
+            {"Origin": "https://evil.example", "Authorization": f"Bearer {_make_session_token()}"}, cookie=False)
+        assert response.status_code == 200
+
+    def test_cross_site_get_is_not_blocked(self):
+        # Reads are protected by CORS; only state-changing requests need the Origin check.
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.server.db") as mock_db, patch("claven.server.auth"):
+                _fake_db_ctx(mock_db)
+                mock_db.get_user_by_id.return_value = {"id": "uid-1", "email": "user@example.com"}
+                with TestClient(app) as client:
+                    client.cookies.set("session", _make_session_token())
+                    response = client.get("/api/me", headers={"Origin": "https://evil.example"})
+        assert response.status_code == 200
 
 
 class TestApiMe:
@@ -1849,7 +1979,8 @@ class TestApiLogout:
     def test_returns_200(self):
         token = _make_session_token()
         with patch.dict("os.environ", _ENV):
-            with TestClient(app) as client:
+            with patch("claven.server.db") as mock_db, TestClient(app) as client:
+                _fake_db_ctx(mock_db)
                 client.cookies.set("session", token)
                 response = client.post("/api/logout")
         assert response.status_code == 200
@@ -1857,7 +1988,8 @@ class TestApiLogout:
     def test_clears_session_cookie(self):
         token = _make_session_token()
         with patch.dict("os.environ", _ENV):
-            with TestClient(app) as client:
+            with patch("claven.server.db") as mock_db, TestClient(app) as client:
+                _fake_db_ctx(mock_db)
                 client.cookies.set("session", token)
                 response = client.post("/api/logout")
         assert "session" in response.headers.get("set-cookie", "")
@@ -1876,7 +2008,7 @@ class TestApiLogout:
 class TestOAuthCallbackSession:
     """Verify the callback issues a session cookie and redirects to /dashboard."""
 
-    def _run_full_oauth(self, extra_env=None, return_to=None, has_existing_tokens=False):
+    def _run_full_oauth(self, extra_env=None, return_to=None, has_existing_tokens=False, session_version=0):
         """Drive the full start → callback flow and return the callback response.
 
         has_existing_tokens=True simulates a returning user who already has
@@ -1909,6 +2041,7 @@ class TestOAuthCallbackSession:
             _fake_db_ctx(mock_db)
             mock_db.upsert_user.return_value = "uid-1"
             mock_db.load_tokens.return_value = existing_tokens
+            mock_db.get_session_version.return_value = session_version
             mock_watch.return_value = {"historyId": "99999"}
 
             with TestClient(app) as client:
@@ -1940,13 +2073,22 @@ class TestOAuthCallbackSession:
         response = self._run_full_oauth()
         assert "session" in response.cookies
 
-    def test_session_cookie_is_samesite_none(self):
-        """Session cookie must be SameSite=None so cross-origin frontends
-        (e.g. localhost:3000 calling api.claven.app) can include it in
-        credentialed fetch requests."""
+    def test_session_cookie_is_samesite_lax_and_expires(self):
+        """claven.app and api.claven.app are the same site, so Lax still reaches the API
+        from the dashboard while requests from other sites go without it (CSRF)."""
         response = self._run_full_oauth()
-        set_cookie = response.headers.get("set-cookie", "").lower()
-        assert "samesite=none" in set_cookie
+        set_cookie = [c for c in response.headers.get_list("set-cookie") if c.startswith("session=")][0].lower()
+        assert "samesite=lax" in set_cookie
+        assert "httponly" in set_cookie and "secure" in set_cookie
+        assert f"max-age={30 * 24 * 3600}" in set_cookie
+
+    def test_issued_session_carries_expiry_and_version(self):
+        import jwt as pyjwt
+        response = self._run_full_oauth(session_version=4)
+        claims = pyjwt.decode(response.cookies["session"], _ENV["SESSION_SECRET"], algorithms=["HS256"])
+        assert claims["user_id"] == "uid-1"
+        assert claims["sv"] == 4
+        assert claims["exp"] - claims["iat"] == 30 * 24 * 3600
 
     def test_new_user_calls_store_credentials(self):
         """First-time sign-in stores OAuth credentials in the DB."""
@@ -2113,7 +2255,8 @@ class TestApiEvents:
     def test_db_unavailable_returns_503(self):
         token = _make_session_token()
         bad_env = {**_ENV, "DATABASE_URL": "postgresql://bad:bad@localhost:1/nonexistent"}
-        with patch.dict("os.environ", bad_env):
+        with patch.dict("os.environ", bad_env), \
+                patch("claven.routes.auth._current_session_version", return_value=0):
             with TestClient(app) as client:
                 client.cookies.set("session", token)
                 response = client.get("/api/events")
@@ -2125,6 +2268,7 @@ class TestApiEvents:
         token = _make_session_token()
         env = {**_ENV, "DATABASE_URL": "postgresql://pooled", "DATABASE_URL_DIRECT": "postgresql://direct"}
         with patch.dict("os.environ", env), \
+                patch("claven.routes.auth._current_session_version", return_value=0), \
                 patch("psycopg2.connect", side_effect=RuntimeError("no db")) as mock_connect:
             with TestClient(app) as client:
                 client.cookies.set("session", token)

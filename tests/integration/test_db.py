@@ -91,6 +91,21 @@ class TestTokens:
         assert db.load_tokens(db_conn, user_id)["revoked_at"] is None
 
 
+class TestSessionVersion:
+    def test_starts_at_zero(self, db_conn):
+        user_id = db.upsert_user(db_conn, "sv-new@example.com")
+        assert db.get_session_version(db_conn, user_id) == 0
+
+    def test_bump_increments(self, db_conn):
+        user_id = db.upsert_user(db_conn, "sv-bump@example.com")
+        db.bump_session_version(db_conn, user_id)
+        db.bump_session_version(db_conn, user_id)
+        assert db.get_session_version(db_conn, user_id) == 2
+
+    def test_missing_user_is_none(self, db_conn):
+        assert db.get_session_version(db_conn, "00000000-0000-0000-0000-000000000000") is None
+
+
 class TestScanState:
     def test_set_and_get_history_id(self, db_conn):
         user_id = db.upsert_user(db_conn, "history@example.com")
