@@ -2578,7 +2578,8 @@ class TestInternalSunset:
                  patch("claven.routes.internal.archive_expired_unknown", return_value=2) as mock_archive, \
                  patch("claven.routes.internal.existing_countdown_ids", return_value={"c/40h": "old-40"}), \
                  patch("claven.routes.internal.build_label_id_cache", side_effect=lambda svc, names: {n: f"id-{n}" for n in names}), \
-                 patch("claven.routes.internal.update_countdowns") as mock_countdowns:
+                 patch("claven.routes.internal.update_countdowns") as mock_countdowns, \
+                 patch("claven.routes.internal.clear_countdowns") as mock_clear:
                 _fake_db_ctx(mock_db)
                 mock_db.get_countdown_cleanup_users.return_value = []
                 mock_db.get_sunset_users.return_value = [
@@ -2600,6 +2601,54 @@ class TestInternalSunset:
         assert mock_countdowns.call_args.args[-1] == {"c/40h": "old-40", **{f"c/{h}h": f"id-c/{h}h" for h in range(24, 0, -1)}}
         assert mock_archive.call_args.args[4] == mock_countdowns.call_args.args[-1]
         mock_db.set_sunset_countdown_active.assert_called_once_with(ANY, "uid-1", True)
+        # c/40h is beyond the 24h timer: deleted, keeping the timer's own hours.
+        mock_clear.assert_called_once()
+        assert mock_clear.call_args.args[1] == "id-c/u"
+        assert mock_clear.call_args.kwargs["keep"] == tuple(f"c/{h}h" for h in range(24, 0, -1))
+
+    def test_unused_countdown_labels_go_after_countdowns_are_updated(self):
+        # update_countdowns first moves waiting mail off the hours beyond the timer.
+        from datetime import datetime, timedelta, timezone
+        order = MagicMock()
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.server.db") as mock_db, \
+                 patch("claven.server.auth"), \
+                 patch("claven.routes.internal.archive_expired_unknown", return_value=0), \
+                 patch("claven.routes.internal.existing_countdown_ids", return_value={"c/72h": "old-72"}), \
+                 patch("claven.routes.internal.build_label_id_cache", side_effect=lambda svc, names: {n: f"id-{n}" for n in names}), \
+                 patch("claven.routes.internal.update_countdowns") as mock_countdowns, \
+                 patch("claven.routes.internal.clear_countdowns") as mock_clear:
+                order.attach_mock(mock_countdowns, "update")
+                order.attach_mock(mock_clear, "clear")
+                _fake_db_ctx(mock_db)
+                mock_db.get_countdown_cleanup_users.return_value = []
+                mock_db.get_sunset_users.return_value = [
+                    {"user_id": "uid-1", "sunset_hours": 24, "changed_at": datetime.now(timezone.utc) - timedelta(days=3)},
+                ]
+                mock_db.get_history_id.return_value = 99
+                with TestClient(app) as client:
+                    client.post("/internal/sunset", headers=self._AUTH)
+        assert [c[0] for c in order.mock_calls] == ["update", "clear"]
+
+    def test_no_label_cleanup_when_every_countdown_label_is_in_use(self):
+        from datetime import datetime, timedelta, timezone
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.server.db") as mock_db, \
+                 patch("claven.server.auth"), \
+                 patch("claven.routes.internal.archive_expired_unknown", return_value=0), \
+                 patch("claven.routes.internal.existing_countdown_ids", return_value={"c/24h": "id-c/24h"}), \
+                 patch("claven.routes.internal.build_label_id_cache", side_effect=lambda svc, names: {n: f"id-{n}" for n in names}), \
+                 patch("claven.routes.internal.update_countdowns"), \
+                 patch("claven.routes.internal.clear_countdowns") as mock_clear:
+                _fake_db_ctx(mock_db)
+                mock_db.get_countdown_cleanup_users.return_value = []
+                mock_db.get_sunset_users.return_value = [
+                    {"user_id": "uid-1", "sunset_hours": 24, "changed_at": datetime.now(timezone.utc) - timedelta(days=3)},
+                ]
+                mock_db.get_history_id.return_value = 99
+                with TestClient(app) as client:
+                    client.post("/internal/sunset", headers=self._AUTH)
+        mock_clear.assert_not_called()
 
     def test_renames_old_labels_before_archiving(self):
         # build_label_id_cache renames unknown-sender to c/u, so it must run

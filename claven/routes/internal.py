@@ -215,6 +215,13 @@ def internal_sunset(request: Request):
                     logger.debug("sunset: %s nothing archived", user_id)
                 update_countdowns(service, unknown_label, label_ids[unknown_label], now,
                                   user["sunset_hours"], user["changed_at"], countdown_ids)
+                # Mail has just moved off any hours beyond the timer; drop those labels.
+                if countdown_ids.keys() - set(needed):
+                    deleted = clear_countdowns(service, label_ids[unknown_label], keep=needed)
+                    logger.info("Sunset deleted %d countdown labels beyond the %dh timer for %s",
+                                deleted, user["sunset_hours"], user_id)
+                else:
+                    logger.debug("sunset: %s has no countdown labels beyond the timer", user_id)
                 _srv.db.set_sunset_countdown_active(conn, user_id, True)
                 archived_total += archived
                 results.append({"user_id": user_id, "status": "ok", "archived": archived})
