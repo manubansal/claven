@@ -205,11 +205,14 @@ def oauth_callback(
         with _srv.db.get_connection() as conn:
             user_id = _srv.db.upsert_user(conn, email)
             existing_tokens = _srv.db.load_tokens(conn, user_id)
-            if not existing_tokens:
+            if not existing_tokens or existing_tokens.get("revoked_at"):
                 if not creds.refresh_token:
                     # User previously authorized the app but Google didn't
                     # return a refresh token (happens when reconnecting after
-                    # disconnect). Redirect back to force re-consent.
+                    # disconnect, or when the stored one was revoked).
+                    # Redirect back to force re-consent.
+                    logger.debug("oauth_callback: no refresh token for %s (stored=%s), forcing consent",
+                                 email, "revoked" if existing_tokens else "none")
                     api_base = os.environ["OAUTH_REDIRECT_URI"].rsplit("/oauth/callback", 1)[0]
                     params: dict = {"force_consent": "true"}
                     if base != os.environ.get("FRONTEND_URL", "https://claven.app"):
@@ -221,7 +224,7 @@ def oauth_callback(
                     response.delete_cookie("oauth_state")
                     response.delete_cookie("oauth_return_to")
                     return response
-                # New user — store credentials only.
+                # New user, or reconnecting after revoked access — store credentials only.
                 _srv.auth.store_credentials(conn, user_id, creds, os.environ["TOKEN_ENCRYPTION_KEY"])
             elif creds.refresh_token:
                 # Returning user with a fresh refresh token — update stored

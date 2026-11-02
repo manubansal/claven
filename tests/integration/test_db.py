@@ -72,6 +72,24 @@ class TestTokens:
         assert bytes(row["access_token_enc"]) == b"new-access"
         assert bytes(row["refresh_token_enc"]) == b"new-refresh"
 
+    def test_new_tokens_are_not_revoked(self, db_conn):
+        user_id = db.upsert_user(db_conn, "fresh@example.com")
+        db.store_tokens(db_conn, user_id, b"a", b"r", None, [])
+        assert db.load_tokens(db_conn, user_id)["revoked_at"] is None
+
+    def test_mark_gmail_access_revoked(self, db_conn):
+        user_id = db.upsert_user(db_conn, "revoked@example.com")
+        db.store_tokens(db_conn, user_id, b"a", b"r", None, [])
+        db.mark_gmail_access_revoked(db_conn, user_id)
+        assert db.load_tokens(db_conn, user_id)["revoked_at"] is not None
+
+    def test_signing_in_again_clears_revoked(self, db_conn):
+        user_id = db.upsert_user(db_conn, "reconnect@example.com")
+        db.store_tokens(db_conn, user_id, b"a", b"r", None, [])
+        db.mark_gmail_access_revoked(db_conn, user_id)
+        db.store_tokens(db_conn, user_id, b"a2", b"r2", None, [])
+        assert db.load_tokens(db_conn, user_id)["revoked_at"] is None
+
 
 class TestScanState:
     def test_set_and_get_history_id(self, db_conn):
