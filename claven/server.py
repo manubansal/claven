@@ -97,6 +97,7 @@ _shutdown_event = threading.Event()
 _active_threads: list[threading.Thread] = []
 _threads_lock = threading.Lock()
 _resumed_jobs: set[str] = set()  # Guards against duplicate job resumption
+_scanning_users: set[str] = set()  # Users with a sent → relabel → label scan chain running here
 
 
 def _shutdown_handler(signum, frame):
@@ -214,6 +215,7 @@ app.include_router(internal_router)
 
 from claven.tasks import (  # noqa: F401, E402
     _needs_sent_scan,
+    _inbox_scan_running,
     _is_current_worker,
     _cancel_scans_and_wait,
     _should_continue_scan,

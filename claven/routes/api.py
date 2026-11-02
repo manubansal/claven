@@ -321,10 +321,13 @@ def api_me(request: Request):
         # Uses scan_unlabeled (scope-aware) to decide if there's work to do.
         sent_running = (sent_scan_progress["status"] == "in_progress"
                         and not _srv._needs_sent_scan(sent_scan_progress))
+        # Between chained steps (sent → relabel → label) the DB can look idle.
+        scanning_here = session["user_id"] in _srv._scanning_users
         if (scan_unlabeled_first_page_count is not None
                 and scan_unlabeled_first_page_count > 0
                 and inbox_scan_status != "in_progress"
                 and not sent_running
+                and not scanning_here
                 and history_id is not None):
             logger.debug("/api/me: auto-retriggering scan chain (scan_unlabeled=%d, inbox_status=%s, sent_status=%s)",
                          scan_unlabeled_first_page_count, inbox_scan_status, sent_scan_progress["status"])
@@ -332,12 +335,14 @@ def api_me(request: Request):
         elif (pending_relabel_count > 0
                 and inbox_scan_status != "in_progress"
                 and not sent_running
+                and not scanning_here
                 and history_id is not None):
             logger.debug("/api/me: auto-triggering relabel scan (pending_relabel=%d)", pending_relabel_count)
             _srv._spawn_scan_thread(_srv._run_relabel_scan, (session["user_id"],))
         else:
-            logger.debug("/api/me: no retrigger (scan_unlabeled=%s, inbox_status=%s, sent_running=%s, pending_relabel=%d, history=%s)",
-                         scan_unlabeled_first_page_count, inbox_scan_status, sent_running, pending_relabel_count, history_id)
+            logger.debug("/api/me: no retrigger (scan_unlabeled=%s, inbox_status=%s, sent_running=%s, scanning_here=%s, pending_relabel=%d, history=%s)",
+                         scan_unlabeled_first_page_count, inbox_scan_status, sent_running, scanning_here,
+                         pending_relabel_count, history_id)
 
     return {
         "email": user["email"],
@@ -523,6 +528,9 @@ def api_connect(request: Request):
             watch_response = _srv.start_watch(service, os.environ["PUBSUB_TOPIC"])
             history_id = int(watch_response["historyId"])
             _srv.db.set_history_id(conn, session["user_id"], history_id)
+            # Marked before the thread starts so a dashboard poll racing it
+            # sees the scan running and doesn't start a second one.
+            _srv.db.set_sent_scan_status(conn, session["user_id"], "in_progress")
         except Exception as exc:
             logger.exception("Connect failed for %s: %s", session["email"], exc)
             raise HTTPException(status_code=500, detail="Failed to start Gmail watch")

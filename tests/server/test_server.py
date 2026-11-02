@@ -180,6 +180,58 @@ class TestNeedsSentScan:
         assert _needs_sent_scan({"status": "in_progress", "updated_at": None}) is True
 
 
+class TestInboxScanRunning:
+    def test_in_progress_and_recently_fetched(self):
+        from claven.server import _inbox_scan_running
+        from datetime import datetime, timezone
+        assert _inbox_scan_running("in_progress", datetime.now(timezone.utc)) is True
+
+    def test_in_progress_but_quiet_for_minutes_is_dead(self):
+        from claven.server import _inbox_scan_running
+        from datetime import datetime, timezone, timedelta
+        assert _inbox_scan_running("in_progress", datetime.now(timezone.utc) - timedelta(minutes=10)) is False
+
+    def test_in_progress_never_fetched(self):
+        from claven.server import _inbox_scan_running
+        assert _inbox_scan_running("in_progress", None) is False
+
+    def test_complete(self):
+        from claven.server import _inbox_scan_running
+        from datetime import datetime, timezone
+        assert _inbox_scan_running("complete", datetime.now(timezone.utc)) is False
+
+
+class TestOneSentScanPerUser:
+    def test_second_start_for_same_user_is_dropped(self, no_background_scans):
+        import claven.server as srv
+        srv._scanning_users.add("uid-1")
+        try:
+            srv._run_sent_scan("uid-1")
+        finally:
+            srv._scanning_users.discard("uid-1")
+        no_background_scans.assert_not_called()
+
+    def test_runs_and_releases_the_user(self, no_background_scans):
+        import claven.server as srv
+        srv._run_sent_scan("uid-1")
+        no_background_scans.assert_called_once()
+        assert "uid-1" not in srv._scanning_users
+
+    def test_releases_the_user_when_the_scan_fails(self, no_background_scans):
+        import claven.server as srv
+        no_background_scans.side_effect = RuntimeError("boom")
+        with pytest.raises(RuntimeError):
+            srv._run_sent_scan("uid-1")
+        assert "uid-1" not in srv._scanning_users
+
+    def test_user_is_held_while_the_scan_runs(self, no_background_scans):
+        import claven.server as srv
+        seen = []
+        no_background_scans.side_effect = lambda *a, **k: seen.append("uid-1" in srv._scanning_users)
+        srv._run_sent_scan("uid-1")
+        assert seen == [True]
+
+
 class TestHealth:
     def test_returns_ok(self):
         with TestClient(app) as client:
@@ -761,16 +813,22 @@ class TestWebhookGmail:
                         )
         mock_db.increment_processed_count.assert_called_once_with(ANY, "uid-1", 3)
 
-    def _webhook(self, has_new, sent_status="complete", pending=()):
+    def _webhook(self, has_new, sent_status="complete", pending=(), sent_updated_at=None,
+                 inbox_status="complete", last_fetched_at=None):
+        self.conn = MagicMock()
         with patch.dict("os.environ", _ENV):
             with patch("claven.server.db") as mock_db, patch("claven.server.auth") as mock_auth, \
-                 patch("claven.server.has_new_messages", return_value=has_new), \
+                 patch("claven.server.has_new_messages", return_value=has_new) as self.mock_has_new, \
                  patch("claven.server.poll_new_messages", return_value=0) as mock_poll, \
-                 patch("claven.server.build_known_senders") as mock_build:
-                _fake_db_ctx(mock_db)
+                 patch("claven.server.build_known_senders") as mock_build, \
+                 patch("claven.server._spawn_scan_thread") as self.mock_spawn:
+                _fake_db_ctx(mock_db, self.conn)
                 mock_db.get_user_by_email.return_value = {"id": "uid-1", "email": "user@example.com"}
                 mock_db.get_history_id.return_value = 100
-                mock_db.get_sent_scan_progress.return_value = {"status": sent_status, "updated_at": None}
+                mock_db.get_sent_scan_progress.return_value = {"status": sent_status, "updated_at": sent_updated_at}
+                mock_db.get_inbox_scan_status.return_value = inbox_status
+                mock_db.get_last_fetched_at.return_value = last_fetched_at
+                self.mock_auth = mock_auth
                 mock_db.get_pending_relabel_senders.return_value = list(pending)
                 mock_db.get_known_senders.return_value = set()
                 mock_auth.get_service.return_value = MagicMock()
@@ -808,9 +866,72 @@ class TestWebhookGmail:
             self._webhook(has_new=True, pending=[])
         mock_relabel.assert_not_called()
 
-    def test_unfinished_sent_scan_still_reconciles(self):
-        _, _, _, mock_build = self._webhook(has_new=False, sent_status="error.unknown")
-        mock_build.assert_called_once()
+    def test_unfinished_sent_scan_restarts_in_the_background(self):
+        # Never inline: a full sent scan inside the webhook's transaction held
+        # the user's rows locked for minutes and stalled their dashboard.
+        response, mock_db, mock_poll, mock_build = self._webhook(has_new=True, sent_status="error.unknown")
+        assert response.json()["detail"] == "sent scan started"
+        mock_build.assert_not_called()
+        mock_poll.assert_not_called()
+        mock_db.set_sent_scan_status.assert_called_once_with(ANY, "uid-1", "in_progress")
+        self.mock_spawn.assert_called_once()
+        assert self.mock_spawn.call_args.args[0].__name__ == "_run_sent_scan"
+        mock_db.set_history_id.assert_not_called()
+
+    def test_restart_commits_before_the_scan_starts(self):
+        # The scan takes the scan_state row lock with SKIP LOCKED; while this
+        # transaction holds it, the scan would skip itself.
+        order = []
+        response = self._webhook_recording_order(order)
+        assert response.json()["detail"] == "sent scan started"
+        assert order == ["commit", "spawn"]
+
+    def _webhook_recording_order(self, order):
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.server.db") as mock_db, patch("claven.server.auth"), \
+                 patch("claven.server._spawn_scan_thread", side_effect=lambda *a: order.append("spawn")):
+                conn = MagicMock()
+                conn.commit.side_effect = lambda: order.append("commit")
+                _fake_db_ctx(mock_db, conn)
+                mock_db.get_user_by_email.return_value = {"id": "uid-1", "email": "user@example.com"}
+                mock_db.get_history_id.return_value = 100
+                mock_db.get_sent_scan_progress.return_value = {"status": "error.unknown", "updated_at": None}
+                with _mock_pubsub_token():
+                    with TestClient(app) as client:
+                        response = client.post("/webhook/gmail", json=_pubsub_payload(history_id="200"),
+                                               headers=_PUBSUB_HEADERS)
+        return response
+
+    def test_skips_while_sent_scan_runs(self):
+        from datetime import datetime, timezone
+        response, mock_db, mock_poll, mock_build = self._webhook(
+            has_new=True, sent_status="in_progress", sent_updated_at=datetime.now(timezone.utc))
+        assert response.json()["detail"] == "sent scan running"
+        mock_build.assert_not_called()
+        mock_poll.assert_not_called()
+        self.mock_spawn.assert_not_called()
+        self.mock_auth.get_service.assert_not_called()
+        # The scan labels what arrives meanwhile and sets the history id when done.
+        mock_db.set_history_id.assert_not_called()
+
+    def test_skips_while_inbox_scan_runs(self):
+        # Every label the scan applies triggers a push; checking Gmail for each
+        # one hit the per-user rate limit and slowed the scan down.
+        from datetime import datetime, timezone
+        response, mock_db, mock_poll, _ = self._webhook(
+            has_new=True, inbox_status="in_progress", last_fetched_at=datetime.now(timezone.utc))
+        assert response.json()["detail"] == "inbox scan running"
+        self.mock_has_new.assert_not_called()
+        self.mock_auth.get_service.assert_not_called()
+        mock_poll.assert_not_called()
+        mock_db.set_history_id.assert_not_called()
+
+    def test_dead_inbox_scan_does_not_block_webhooks(self):
+        from datetime import datetime, timezone, timedelta
+        _, _, mock_poll, _ = self._webhook(
+            has_new=True, inbox_status="in_progress",
+            last_fetched_at=datetime.now(timezone.utc) - timedelta(minutes=10))
+        mock_poll.assert_called_once()
 
     def test_webhook_skips_locked_user(self):
         with patch.dict("os.environ", _ENV):
@@ -1318,6 +1439,31 @@ class TestApiMe:
         mock_threading.Thread.assert_called_once()
         assert mock_threading.Thread.call_args[1]["target"].__name__ == "_run_sent_scan"
 
+    def test_api_me_no_retrigger_while_this_process_scans_the_user(self):
+        """Between chained steps the DB can look idle; the process knows better."""
+        import claven.server as srv
+        token = _make_session_token()
+        srv._scanning_users.add("uid-1")
+        try:
+            with patch.dict("os.environ", _ENV):
+                with patch("claven.server.db") as mock_db, \
+                     patch("claven.server.auth") as mock_auth, \
+                     patch("claven.server.threading") as mock_threading:
+                    _fake_db_ctx(mock_db)
+                    mock_db.get_user_by_id.return_value = {"id": "uid-1", "email": "user@example.com"}
+                    mock_db.get_history_id.return_value = 12345
+                    mock_db.get_inbox_scan_status.return_value = "complete"
+                    mock_db.get_pending_relabel_senders.return_value = ["a@example.com"]
+                    mock_auth.get_service.return_value = self._make_gmail_service(
+                        messages_total=100, unlabeled_ids=["m1", "m2", "m3"],
+                    )
+                    with TestClient(app) as client:
+                        client.cookies.set("session", token)
+                        client.get("/api/me")
+        finally:
+            srv._scanning_users.discard("uid-1")
+        mock_threading.Thread.assert_not_called()
+
     def test_api_me_retriggers_on_error_status(self):
         """Error status with unlabeled messages retriggers the scan."""
         token = _make_session_token()
@@ -1617,6 +1763,9 @@ class TestApiConnect:
                     client.post("/api/connect")
         mock_threading.Thread.assert_called_once()
         assert mock_threading.Thread.call_args[1]["target"].__name__ == "_run_sent_scan"
+        # Marked before the thread starts, so a dashboard poll racing it sees the
+        # scan running and doesn't start a second one.
+        mock_db.set_sent_scan_status.assert_called_once_with(ANY, "uid-1", "in_progress")
 
     def test_watch_failure_returns_500(self):
         token = _make_session_token()

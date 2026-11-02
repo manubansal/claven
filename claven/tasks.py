@@ -19,6 +19,7 @@ from datetime import datetime, timezone, timedelta
 
 import claven.server as _srv
 from claven.core.sunset import COUNTDOWN_LABELS, countdown_labels_for, existing_countdown_ids
+from claven.core.health import _STALE_THRESHOLD as _STALE_INBOX_SCAN_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,20 @@ def _needs_sent_scan(scan_progress: dict) -> bool:
         return True
     logger.debug("_needs_sent_scan: True (status=%s)", status)
     return True
+
+
+def _inbox_scan_running(status: str | None, last_fetched_at) -> bool:
+    """Return True if a label scan is in progress and still making progress."""
+    if status != "in_progress":
+        logger.debug("_inbox_scan_running: False (status=%s)", status)
+        return False
+    # The label scan touches last_fetched_at every batch; quiet past the
+    # dashboard's stall threshold means it died.
+    if last_fetched_at and datetime.now(timezone.utc) - last_fetched_at < _STALE_INBOX_SCAN_THRESHOLD:
+        logger.debug("_inbox_scan_running: True (last_fetched_at=%s)", last_fetched_at)
+        return True
+    logger.debug("_inbox_scan_running: False (stale in_progress, last_fetched_at=%s)", last_fetched_at)
+    return False
 
 
 def _label_id_cache_for_config(service, label_configs: list[dict]) -> dict[str, str]:
@@ -281,16 +296,31 @@ def _run_task(
 # ── Scan runners ─────────────────────────────────────────────────────────────
 
 def _run_sent_scan(user_id: str):
-    """Build known senders list, then chain to relabel → label scan."""
+    """Build known senders list, then chain to relabel → label scan.
+
+    At most one chain per user runs in this process: the dashboard, connect
+    and webhook can all start one at nearly the same moment.
+    """
+    with _srv._threads_lock:
+        if user_id in _srv._scanning_users:
+            logger.info("Sent scan for %s already running in this process, not starting another", user_id)
+            return
+        _srv._scanning_users.add(user_id)
+    logger.debug("_run_sent_scan: claimed %s", user_id)
+
     def task_fn(service):
         return _srv.build_known_senders(
             service, None, user_id,
             should_continue=lambda: _should_continue_scan(user_id),
             shutdown_event=_srv._shutdown_event,
         )
-    _run_task(user_id, "Sent scan", task_fn,
-              set_status=_srv.db.set_sent_scan_status,
-              chain=[_run_relabel_scan, _run_inbox_scan])
+    try:
+        _run_task(user_id, "Sent scan", task_fn,
+                  set_status=_srv.db.set_sent_scan_status,
+                  chain=[_run_relabel_scan, _run_inbox_scan])
+    finally:
+        with _srv._threads_lock:
+            _srv._scanning_users.discard(user_id)
 
 
 def _run_relabel_scan(user_id: str):
