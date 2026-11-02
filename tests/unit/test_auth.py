@@ -249,6 +249,61 @@ class TestGetService:
                 get_service(conn, "user-uuid", VALID_KEY_HEX)
             mock_refresh.assert_not_called()
 
+    def test_revoked_access_raises_without_calling_google(self):
+        from datetime import datetime, timezone
+        from claven.core.auth import GmailAccessRevoked
+
+        conn = MagicMock()
+        row = {**self._make_token_row(datetime(2000, 1, 1)), "revoked_at": datetime(2026, 11, 1, tzinfo=timezone.utc)}
+        with patch("claven.core.auth.db") as mock_db, \
+             patch("claven.core.auth.build") as mock_build, \
+             patch.dict("os.environ", {"OAUTH_CLIENT_ID": "cid", "OAUTH_CLIENT_SECRET": "csec"}):
+            mock_db.load_tokens.return_value = row
+            with patch("google.oauth2.credentials.Credentials.refresh") as mock_refresh:
+                with pytest.raises(GmailAccessRevoked) as info:
+                    get_service(conn, "user-uuid", VALID_KEY_HEX)
+            mock_refresh.assert_not_called()
+            mock_build.assert_not_called()
+            mock_db.mark_gmail_access_revoked.assert_not_called()
+        assert info.value.newly_revoked is False
+
+    def test_invalid_grant_marks_access_revoked(self):
+        """Google rejects the refresh token for good: remember it so jobs stop retrying."""
+        from datetime import datetime
+        from google.auth.exceptions import RefreshError
+        from claven.core.auth import GmailAccessRevoked
+
+        conn = MagicMock()
+        with patch("claven.core.auth.db") as mock_db, \
+             patch("claven.core.auth.build"), \
+             patch("claven.core.auth.Request"), \
+             patch.dict("os.environ", {"OAUTH_CLIENT_ID": "cid", "OAUTH_CLIENT_SECRET": "csec"}):
+            mock_db.load_tokens.return_value = self._make_token_row(datetime(2000, 1, 1))
+            token_conn = mock_db.get_connection.return_value.__enter__.return_value
+            with patch("google.oauth2.credentials.Credentials.refresh",
+                       side_effect=RefreshError("invalid_grant: Bad Request", {"error": "invalid_grant"})):
+                with pytest.raises(GmailAccessRevoked) as info:
+                    get_service(conn, "user-uuid", VALID_KEY_HEX)
+            # Its own transaction: the caller's rolls back when the error propagates.
+            mock_db.mark_gmail_access_revoked.assert_called_once_with(token_conn, "user-uuid")
+        assert info.value.newly_revoked is True
+
+    def test_other_refresh_errors_are_not_treated_as_revoked(self):
+        from datetime import datetime
+        from google.auth.exceptions import RefreshError
+
+        conn = MagicMock()
+        with patch("claven.core.auth.db") as mock_db, \
+             patch("claven.core.auth.build"), \
+             patch("claven.core.auth.Request"), \
+             patch.dict("os.environ", {"OAUTH_CLIENT_ID": "cid", "OAUTH_CLIENT_SECRET": "csec"}):
+            mock_db.load_tokens.return_value = self._make_token_row(datetime(2000, 1, 1))
+            with patch("google.oauth2.credentials.Credentials.refresh",
+                       side_effect=RefreshError("temporarily_unavailable")):
+                with pytest.raises(RefreshError):
+                    get_service(conn, "user-uuid", VALID_KEY_HEX)
+            mock_db.mark_gmail_access_revoked.assert_not_called()
+
     def test_raises_when_no_credentials(self):
         conn = MagicMock()
         with patch("claven.core.auth.db") as mock_db:

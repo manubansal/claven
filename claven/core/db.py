@@ -93,7 +93,8 @@ def store_tokens(
                 access_token_enc = EXCLUDED.access_token_enc,
                 refresh_token_enc = EXCLUDED.refresh_token_enc,
                 token_expiry = EXCLUDED.token_expiry,
-                scopes = EXCLUDED.scopes
+                scopes = EXCLUDED.scopes,
+                revoked_at = NULL
             """,
             (user_id, access_token_enc, refresh_token_enc, token_expiry, scopes),
         )
@@ -103,13 +104,22 @@ def load_tokens(conn, user_id: str) -> dict | None:
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             """
-            SELECT access_token_enc, refresh_token_enc, token_expiry, scopes
+            SELECT access_token_enc, refresh_token_enc, token_expiry, scopes, revoked_at
             FROM gmail_tokens WHERE user_id = %s
             """,
             (user_id,),
         )
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+def mark_gmail_access_revoked(conn, user_id: str) -> None:
+    """Record that Google rejected the user's refresh token; cleared by store_tokens."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE gmail_tokens SET revoked_at = NOW() WHERE user_id = %s AND revoked_at IS NULL",
+            (user_id,),
+        )
 
 
 def delete_credentials(conn, user_id: str) -> None:

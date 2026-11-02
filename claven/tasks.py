@@ -18,6 +18,7 @@ import time as _time
 from datetime import datetime, timezone, timedelta
 
 import claven.server as _srv
+from claven.core.auth import GmailAccessRevoked
 from claven.core.sunset import COUNTDOWN_LABELS, countdown_labels_for, existing_countdown_ids
 from claven.core.health import _STALE_THRESHOLD as _STALE_INBOX_SCAN_THRESHOLD
 
@@ -34,6 +35,8 @@ def _classify_error(exc: Exception) -> str:
     Examines the exception string to classify it into a known error category.
     Used by _run_task to store classified labels instead of raw exception text.
     """
+    if isinstance(exc, GmailAccessRevoked):
+        return "error.gmail.auth_expired"
     exc_str = str(exc).lower()
     if "deadlock" in exc_str:
         return "error.db.deadlock"
@@ -57,6 +60,10 @@ def _handle_error(exc: Exception, user_id: str, context: str, conn=None) -> str:
     conn is optional — if None or DB write fails, event log is skipped.
     """
     error_label = _classify_error(exc)
+    if isinstance(exc, GmailAccessRevoked) and not exc.newly_revoked:
+        # Reported when first found; until the user signs in again it's expected.
+        logger.info("%s skipped for %s: Gmail access revoked", context, user_id)
+        return error_label
     logger.exception("%s failed for %s: %s (classified: %s)", context, user_id, exc, error_label)
     if conn:
         try:

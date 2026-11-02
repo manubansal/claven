@@ -145,6 +145,36 @@ class TestClassifyError:
         from claven.tasks import _classify_error
         assert _classify_error(Exception("something unexpected")) == "error.unknown"
 
+    def test_revoked_access(self):
+        from claven.core.auth import GmailAccessRevoked
+        from claven.tasks import _classify_error
+        assert _classify_error(GmailAccessRevoked("uid-1", newly_revoked=False)) == "error.gmail.auth_expired"
+
+
+class TestHandleRevokedAccess:
+    """A revoked account is reported once, then skipped quietly until the user reconnects."""
+
+    def test_newly_revoked_is_an_error_and_an_event(self, caplog):
+        from claven.core.auth import GmailAccessRevoked
+        from claven.tasks import _handle_error
+        mock_db = MagicMock()
+        with patch("claven.server.db", mock_db), caplog.at_level(logging.INFO, logger="claven.tasks"):
+            label = _handle_error(GmailAccessRevoked("uid-1", newly_revoked=True), "uid-1", "Poll processing", MagicMock())
+        assert label == "error.gmail.auth_expired"
+        assert any(r.levelno == logging.ERROR for r in caplog.records)
+        mock_db.log_event.assert_called_once()
+
+    def test_already_revoked_is_quiet(self, caplog):
+        from claven.core.auth import GmailAccessRevoked
+        from claven.tasks import _handle_error
+        mock_db = MagicMock()
+        with patch("claven.server.db", mock_db), caplog.at_level(logging.DEBUG, logger="claven.tasks"):
+            label = _handle_error(GmailAccessRevoked("uid-1", newly_revoked=False), "uid-1", "Poll processing", MagicMock())
+        assert label == "error.gmail.auth_expired"
+        assert all(r.levelno < logging.WARNING for r in caplog.records)
+        assert any("revoked" in r.getMessage() for r in caplog.records)
+        mock_db.log_event.assert_not_called()
+
 
 class TestNeedsSentScan:
     def test_complete_returns_false(self):
@@ -409,6 +439,43 @@ class TestOAuthCallback:
                     _fake_db_ctx(mock_db)
                     mock_db.upsert_user.return_value = "uid-1"
                     mock_db.load_tokens.return_value = None  # no stored tokens
+
+                    response = client.get(
+                        f"/oauth/callback?code=abc&state={state}",
+                        follow_redirects=False,
+                    )
+        assert response.status_code == 302
+        assert "force_consent=true" in response.headers["location"]
+        assert "/oauth/start" in response.headers["location"]
+
+    def test_revoked_user_without_new_refresh_token_is_sent_to_consent(self):
+        """A returning user whose access was revoked signs in without the consent
+        screen, so Google sends no refresh token and the stored one is dead."""
+        with patch.dict("os.environ", {**_ENV, "PUBSUB_TOPIC": "projects/p/topics/t"}):
+            with TestClient(app) as client:
+                start = client.get("/oauth/start", follow_redirects=False)
+                state = start.cookies.get("oauth_state")
+                client.cookies.set("oauth_state", state)
+
+                mock_creds = MagicMock()
+                mock_creds.id_token = "fake-id-token"
+                mock_creds.refresh_token = None  # Google didn't return one
+                mock_creds.scopes = {"https://www.googleapis.com/auth/gmail.modify", "openid"}
+
+                mock_flow = MagicMock()
+                mock_flow.credentials = mock_creds
+                mock_flow.authorization_url.return_value = ("https://accounts.google.com/o/oauth2/auth", "ignored")
+
+                with (
+                    patch("claven.server.Flow") as mock_flow_cls,
+                    patch("claven.server.google_id_token.verify_oauth2_token") as mock_verify,
+                    patch("claven.server.db") as mock_db,
+                ):
+                    mock_flow_cls.from_client_config.return_value = mock_flow
+                    mock_verify.return_value = {"email": "user@example.com"}
+                    _fake_db_ctx(mock_db)
+                    mock_db.upsert_user.return_value = "uid-1"
+                    mock_db.load_tokens.return_value = {"revoked_at": "2026-11-01T00:00:00Z"}
 
                     response = client.get(
                         f"/oauth/callback?code=abc&state={state}",
