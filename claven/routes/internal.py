@@ -268,26 +268,40 @@ async def webhook_gmail(request: Request):
             logger.info("No history_id for %s — skipping", email)
             return {"status": "ok", "detail": "no history_id"}
 
+        # While a scan runs, every label it applies triggers a push. Leave the
+        # history id alone: the label scan covers new inbox mail and sets the
+        # history id when it finishes. A full sent scan never runs here — inside
+        # this transaction it would hold the user's rows locked for minutes.
+        scan_progress = _srv.db.get_sent_scan_progress(conn, user["id"])
+        if scan_progress["status"] != "complete":
+            if _srv._needs_sent_scan(scan_progress):
+                logger.info("Webhook for %s: sent scan unfinished (status=%s), restarting it",
+                            email, scan_progress["status"])
+                _srv.db.set_sent_scan_status(conn, user["id"], "in_progress")
+                # Release this webhook's scan_state lock first, or the scan's
+                # SKIP LOCKED check sees it and skips itself.
+                conn.commit()
+                _srv._spawn_scan_thread(_srv._run_sent_scan, (user["id"],))
+                return {"status": "ok", "detail": "sent scan started"}
+            logger.debug("webhook_gmail: sent scan running for %s, skipping", email)
+            return {"status": "ok", "detail": "sent scan running"}
+        if _srv._inbox_scan_running(_srv.db.get_inbox_scan_status(conn, user["id"]),
+                                    _srv.db.get_last_fetched_at(conn, user["id"])):
+            logger.debug("webhook_gmail: label scan running for %s, skipping", email)
+            return {"status": "ok", "detail": "inbox scan running"}
+
         logger.debug("webhook_gmail: processing for %s (history_id=%d)", email, stored_history_id)
         try:
             service = _srv.auth.get_service(conn, user["id"], os.environ["TOKEN_ENCRYPTION_KEY"])
 
-            # Incremental known senders update — cheap with cursor (one list_history call).
-            # Also serves as reconciliation: if the initial scan never completed,
-            # build_known_senders falls through to a full scan.
-            scan_progress = _srv.db.get_sent_scan_progress(conn, user["id"])
             # Pushes also fire for label changes (including Claven's own); skip
-            # the work unless a message was added or the sent scan needs finishing.
-            if scan_progress["status"] == "complete" and not _srv.has_new_messages(service, stored_history_id):
+            # the work unless a message was added.
+            if not _srv.has_new_messages(service, stored_history_id):
                 logger.debug("webhook_gmail: no new messages for %s, advancing history only", email)
                 _srv.db.set_history_id(conn, user["id"], notification_history_id)
                 return {"status": "ok", "detail": "no new messages"}
-            if _srv._needs_sent_scan(scan_progress):
-                logger.debug("webhook_gmail: reconciling sent scan (status=%s)", scan_progress["status"])
-                _srv.db.set_sent_scan_status(conn, user["id"], "in_progress")
+            # Incremental known senders update — cheap with cursor (one list_history call).
             _srv.build_known_senders(service, conn, user["id"])
-            if scan_progress["status"] != "complete":
-                _srv.db.set_sent_scan_status(conn, user["id"], "complete")
 
             known_senders = _srv.db.get_known_senders(conn, user["id"])
             auto_archive = _srv.db.get_auto_archive_unknown(conn, user["id"])
