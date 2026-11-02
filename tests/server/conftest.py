@@ -13,3 +13,10 @@ def no_background_scans():
     """
     with patch("claven.tasks._run_task") as run_task:
         yield run_task
+
+
+@pytest.fixture(autouse=True)
+def pubsub_push_identity(monkeypatch):
+    """The webhook accepts only Claven's push subscription identity, as configured in prod."""
+    monkeypatch.setenv("PUBSUB_AUDIENCE", "https://api.claven.app/webhook/gmail")
+    monkeypatch.setenv("PUBSUB_PUSH_SERVICE_ACCOUNT", "claven-pubsub@claven-prod.iam.gserviceaccount.com")

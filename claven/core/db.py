@@ -68,6 +68,20 @@ def get_user_by_id(conn, user_id: str) -> dict | None:
         return dict(row) if row else None
 
 
+def get_session_version(conn, user_id: str) -> int | None:
+    """The user's current session version, or None if the user doesn't exist."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT session_version FROM users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def bump_session_version(conn, user_id: str) -> None:
+    """Invalidate every session issued to the user so far."""
+    with conn.cursor() as cur:
+        cur.execute("UPDATE users SET session_version = session_version + 1 WHERE id = %s", (user_id,))
+
+
 def get_all_users(conn) -> list[dict]:
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute("SELECT id::text, email, created_at FROM users")

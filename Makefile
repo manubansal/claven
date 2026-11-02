@@ -29,7 +29,9 @@ dev-read-only:
 # Frontend-only dev against the prod API — no local backend.
 # Sign-in and all API calls go through https://api.claven.app.
 # Safe: no local DB connection, no backend code running.
-# Requires: CORS_EXTRA_ORIGINS=http://localhost:3000 set on the prod Cloud Run service.
+# No longer signs in: the session cookie is SameSite=Lax, which localhost
+# (another site) never receives, and prod doesn't allow the localhost origin.
+# Use dev-read-write or dev-read-only, which run a local backend.
 dev-local-frontend:
 	NEXT_PUBLIC_API_URL=https://api.claven.app npm --prefix web run dev
 

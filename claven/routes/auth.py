@@ -3,6 +3,7 @@
 import logging
 import os
 import secrets
+import time
 from urllib.parse import urlencode, quote
 
 import jwt as pyjwt
@@ -18,6 +19,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Sessions last 30 days; signing in again issues a new one.
+SESSION_LIFETIME_SECONDS = 30 * 24 * 3600
+_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -30,16 +35,23 @@ def _require_internal_auth(request: Request) -> None:
 def _verify_pubsub_token(request: Request) -> None:
     """Verify the OIDC bearer token Google attaches to Pub/Sub push deliveries.
 
-    Rejects requests that don't carry a token signed by Google whose email
-    claim identifies a Pub/Sub service account.  If PUBSUB_AUDIENCE is set,
-    the token's 'aud' claim must also match — recommended in production.
+    The token must be signed by Google for PUBSUB_AUDIENCE and identify
+    PUBSUB_PUSH_SERVICE_ACCOUNT, the account Claven's push subscription signs
+    with. Any Google Cloud project can push signed tokens at this URL, so
+    "some service account" is not enough. Both settings are required: without
+    them every push is refused.
     """
+    audience = os.environ.get("PUBSUB_AUDIENCE")
+    push_account = os.environ.get("PUBSUB_PUSH_SERVICE_ACCOUNT")
+    if not audience or not push_account:
+        logger.error("Webhook auth not configured (PUBSUB_AUDIENCE and PUBSUB_PUSH_SERVICE_ACCOUNT are required)")
+        raise HTTPException(status_code=500, detail="Webhook auth not configured")
+
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Pub/Sub auth token")
 
     token = auth_header[len("Bearer "):]
-    audience = os.environ.get("PUBSUB_AUDIENCE")  # None → skip audience check
 
     try:
         id_info = google_id_token.verify_oauth2_token(
@@ -52,20 +64,23 @@ def _verify_pubsub_token(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Invalid Pub/Sub token")
 
     email = id_info.get("email", "")
-    if not email.endswith(".gserviceaccount.com"):
-        logger.warning("Pub/Sub token email is not a GCP service account: %s", email)
+    if email != push_account or id_info.get("email_verified") is not True:
+        logger.warning("Pub/Sub token from unexpected identity: %s (verified=%s)", email, id_info.get("email_verified"))
         raise HTTPException(status_code=401, detail="Unexpected Pub/Sub service account")
 
 
-def _issue_session(user_id: str, email: str) -> str:
+def _issue_session(user_id: str, email: str, session_version: int) -> str:
     """Return a signed JWT encoding the user's identity.
 
     Accepted by all authenticated endpoints as either a 'session' cookie
-    (browser) or an Authorization: Bearer token (CLI).  No expiry is set
-    for now — rotate SESSION_SECRET to invalidate all sessions.
+    (browser) or an Authorization: Bearer token (CLI). It expires after
+    SESSION_LIFETIME_SECONDS and carries the user's session version ('sv'),
+    so bumping the version (logout) revokes it early.
     """
+    now = int(time.time())
     return pyjwt.encode(
-        {"user_id": user_id, "email": email},
+        {"user_id": user_id, "email": email, "iat": now, "exp": now + SESSION_LIFETIME_SECONDS,
+         "sv": session_version},
         os.environ["SESSION_SECRET"],
         algorithm="HS256",
     )
@@ -75,20 +90,49 @@ def _get_session(request: Request) -> dict:
     """Extract and verify the session JWT from cookie or Bearer header.
 
     Checks the 'session' cookie first (browser path), then falls back to
-    the Authorization: Bearer header (CLI path).  Raises 401 if missing
-    or invalid so callers can treat the result as trusted.
+    the Authorization: Bearer header (CLI path).  Raises 401 if missing,
+    expired, revoked, or invalid so callers can treat the result as trusted.
+
+    A state-changing request authenticated by the cookie is refused (403) when
+    its Origin header names another site: the cookie is SameSite=Lax, and this
+    backs it up. Requests without an Origin header (non-browser clients) pass;
+    browsers always send one on cross-site POSTs.
     """
     token = request.cookies.get("session")
-    if not token:
+    if token:
+        origin = request.headers.get("origin")
+        if (request.method not in _SAFE_METHODS and origin is not None
+                and origin not in _srv._allowed_origins()):
+            logger.warning("Refused %s %s with session cookie from origin %s",
+                           request.method, request.url.path, origin)
+            raise HTTPException(status_code=403, detail="Cross-site request refused")
+        logger.debug("_get_session: cookie session (method=%s, origin=%s)", request.method, origin)
+    else:
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             token = auth_header[len("Bearer "):]
+            logger.debug("_get_session: bearer session")
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
-        return pyjwt.decode(token, os.environ["SESSION_SECRET"], algorithms=["HS256"])
-    except pyjwt.PyJWTError:
+        claims = pyjwt.decode(token, os.environ["SESSION_SECRET"], algorithms=["HS256"],
+                              options={"require": ["exp", "iat"]})
+    except pyjwt.PyJWTError as exc:
+        logger.debug("_get_session: rejected token: %s", exc)
         raise HTTPException(status_code=401, detail="Invalid session")
+    if not isinstance(claims.get("sv"), int):
+        logger.debug("_get_session: token has no session version")
+        raise HTTPException(status_code=401, detail="Invalid session")
+    current = _current_session_version(claims.get("user_id"))
+    if current != claims["sv"]:
+        logger.debug("_get_session: session version %s, current %s", claims["sv"], current)
+        raise HTTPException(status_code=401, detail="Session revoked")
+    return claims
+
+
+def _current_session_version(user_id: str) -> int | None:
+    with _srv.db.get_connection() as conn:
+        return _srv.db.get_session_version(conn, user_id)
 
 
 def _make_flow():
@@ -241,17 +285,25 @@ def oauth_callback(
     # No scan triggered here — /api/me handles retrigger logic on first
     # dashboard load, respecting cancel state and exclusive job ownership.
 
-    session_token = _issue_session(user_id, email)
+    with _srv.db.get_connection() as conn:
+        session_version = _srv.db.get_session_version(conn, user_id)
+    session_token = _issue_session(user_id, email, session_version)
     response = RedirectResponse(url=f"{base}/dashboard", status_code=302)
     response.delete_cookie("oauth_state")
     response.delete_cookie("oauth_return_to")
-    response.set_cookie("session", session_token, httponly=True, secure=True, samesite="none")
+    # claven.app and api.claven.app are the same site, so Lax reaches the API
+    # from the dashboard but not from other sites' requests.
+    response.set_cookie("session", session_token, httponly=True, secure=True, samesite="lax",
+                        max_age=SESSION_LIFETIME_SECONDS)
     return response
 
 
 @router.post("/api/logout")
 def api_logout(request: Request):
-    _get_session(request)
+    session = _get_session(request)
+    # Revokes every session the user has, not just this browser's.
+    with _srv.db.get_connection() as conn:
+        _srv.db.bump_session_version(conn, session["user_id"])
     response = JSONResponse({"ok": True})
     response.delete_cookie("session")
     return response

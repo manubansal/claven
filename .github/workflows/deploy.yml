@@ -89,8 +89,8 @@ jobs:
             OAUTH_REDIRECT_URI=${{ secrets.OAUTH_REDIRECT_URI }}
             PUBSUB_TOPIC=${{ secrets.PUBSUB_TOPIC }}
             PUBSUB_AUDIENCE=https://api.claven.app/webhook/gmail
+            PUBSUB_PUSH_SERVICE_ACCOUNT=claven-pubsub@claven-prod.iam.gserviceaccount.com
             FRONTEND_URL=https://claven.app
-            CORS_EXTRA_ORIGINS=http://localhost:3000
           flags: >-
             --min-instances=0
             --max-instances=10
@@ -113,12 +113,12 @@ jobs:
           # Sign-in smoke test — exercises the full /api/me code path
           # Look up test user ID, create a session JWT, and verify /api/me returns 200
           python - <<'PYEOF'
-          import os, sys, json
+          import os, sys, json, time
           import psycopg2, jwt
 
           conn = psycopg2.connect(os.environ["DATABASE_URL"])
           with conn.cursor() as cur:
-              cur.execute("SELECT id::text FROM users WHERE email = %s", (os.environ["TEST_GMAIL_EMAIL"],))
+              cur.execute("SELECT id::text, session_version FROM users WHERE email = %s", (os.environ["TEST_GMAIL_EMAIL"],))
               row = cur.fetchone()
           conn.close()
 
@@ -126,9 +126,12 @@ jobs:
               print("SKIP: test user not found in DB")
               sys.exit(0)
 
-          user_id = row[0]
+          user_id, session_version = row
+          now = int(time.time())
+          # Same claims as claven.routes.auth._issue_session, valid for 5 minutes.
           token = jwt.encode(
-              {"user_id": user_id, "email": os.environ["TEST_GMAIL_EMAIL"]},
+              {"user_id": user_id, "email": os.environ["TEST_GMAIL_EMAIL"],
+               "iat": now, "exp": now + 300, "sv": session_version},
               os.environ["SESSION_SECRET"],
               algorithm="HS256",
           )
