@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 
 from google.oauth2 import id_token as google_id_token  # noqa: F401 — patched by tests
 from google_auth_oauthlib.flow import Flow  # noqa: F401 — accessed via _srv.Flow by routes
+import claven.core.account as account  # noqa: F401 — accessed via _srv.account by routes
 import claven.core.auth as auth  # noqa: F401 — accessed via _srv.auth by routes/tasks
 import claven.core.db as db
 from claven.core.gmail import build_label_id_cache, get_profile, has_new_messages  # noqa: F401

@@ -1937,6 +1937,42 @@ class TestApiDisconnect:
         mock_db.clear_watch_state.assert_called_once()
 
 
+class TestApiDeleteAccount:
+    def test_no_token_returns_401(self):
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.server.account") as mock_account, TestClient(app) as client:
+                response = client.post("/api/account/delete")
+        assert response.status_code == 401
+        mock_account.delete_account.assert_not_called()
+
+    def test_deletes_account_and_clears_session_cookie(self):
+        token = _make_session_token()
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.server.db") as mock_db, \
+                 patch("claven.server.account") as mock_account:
+                _fake_db_ctx(mock_db)
+                mock_account.delete_account.return_value = {"watch_stopped": True, "token_revoked": True}
+                with TestClient(app) as client:
+                    client.cookies.set("session", token)
+                    response = client.post("/api/account/delete")
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+        mock_account.delete_account.assert_called_once_with(ANY, "uid-1", _ENV["TOKEN_ENCRYPTION_KEY"])
+        assert 'session=""' in response.headers.get("set-cookie", "")
+
+    def test_cross_origin_request_is_rejected(self):
+        token = _make_session_token()
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.server.db") as mock_db, \
+                 patch("claven.server.account") as mock_account:
+                _fake_db_ctx(mock_db)
+                with TestClient(app) as client:
+                    client.cookies.set("session", token)
+                    response = client.post("/api/account/delete", headers={"Origin": "https://evil.example"})
+        assert response.status_code == 403
+        mock_account.delete_account.assert_not_called()
+
+
 class TestApiConnect:
     def test_no_token_returns_401(self):
         with patch.dict("os.environ", _ENV):

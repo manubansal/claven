@@ -82,6 +82,12 @@ def bump_session_version(conn, user_id: str) -> None:
         cur.execute("UPDATE users SET session_version = session_version + 1 WHERE id = %s", (user_id,))
 
 
+def delete_user(conn, user_id: str) -> None:
+    """Delete the user; their tokens, scan state, known senders and events cascade."""
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
+
+
 def get_all_users(conn) -> list[dict]:
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute("SELECT id::text, email, created_at FROM users")

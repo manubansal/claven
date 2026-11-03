@@ -1,4 +1,4 @@
-"""Dashboard API routes (/api/me, /api/config, /api/connect, /api/disconnect, /api/settings/scan-scope, /api/events)."""
+"""Dashboard API routes (/api/me, /api/config, /api/connect, /api/disconnect, /api/account/delete, /api/settings/scan-scope, /api/events)."""
 
 import json
 import logging
@@ -549,6 +549,17 @@ def api_disconnect(request: Request):
             logger.warning("stop_watch failed during disconnect for %s: %s", session["email"], exc)
         _srv.db.clear_watch_state(conn, session["user_id"])
     return JSONResponse({"ok": True})
+
+
+@router.post("/api/account/delete")
+def api_delete_account(request: Request):
+    """Delete the user's account and all their data, and revoke Claven's Gmail access."""
+    session = _get_session(request)
+    with _srv.db.get_connection() as conn:
+        _srv.account.delete_account(conn, session["user_id"], os.environ["TOKEN_ENCRYPTION_KEY"])
+    response = JSONResponse({"ok": True})
+    response.delete_cookie("session")
+    return response
 
 
 @router.post("/api/settings/scan-scope")

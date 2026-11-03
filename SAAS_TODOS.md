@@ -650,9 +650,9 @@ Use shadcn templates ([ui.shadcn.com/templates](https://ui.shadcn.com/templates)
 - [ ] Document installation in README
 
 ### User offboarding
-- [ ] Implement account deletion: revoke Gmail OAuth tokens, call `gmail.users.stop()`, delete all user rows from Neon
+- [x] Implement account deletion: revoke Gmail OAuth tokens, call `gmail.users.stop()`, delete all user rows from Neon (`claven/core/account.py`, CASA M5)
 - [ ] Expose via CLI: `claven auth delete --user <email>`
-- [ ] Expose via server: `DELETE /user` (authenticated)
+- [x] Expose via server: `POST /api/account/delete` (authenticated) and the dashboard's "Delete account" button
 
 ### API versioning
 - [ ] Define a versioning policy for the CLI ↔ server API contract (e.g. `/v1/` prefix, or a version header)
@@ -726,7 +726,7 @@ Must-fix (likely to fail the assessment):
 - [x] M2 Session expiry and revocation. JWT `iat`/`exp` (e.g. 7 days) plus a session-version claim checked against a new `users.session_version` column, incremented by logout and account deletion; cookie `max_age`; `pyjwt.decode(..., options={"require": ["exp"]})` (`claven/routes/auth.py:60-90,248-257`).
 - [x] M3 CSRF. Session cookie `SameSite=Lax` (`auth.py:248`; breaks `make dev-local-frontend` against the prod API); reject non-GET requests whose `Origin` isn't allow-listed, on every POST in `api.py` and `actions.py`.
 - [x] M4 Pub/Sub webhook identity. Accept only Claven's push service account (`PUBSUB_PUSH_SERVICE_ACCOUNT`, with `email_verified`); fail closed if it or `PUBSUB_AUDIENCE` is unset (`auth.py:30-57`). Take the history id from `get_profile()` instead of the notification (`internal.py:301,313`). (Not done: with only Claven's push account accepted, the notification comes from Gmail.)
-- [ ] M5 Account and data deletion (see also "User offboarding"). `POST /api/account/delete` with the logic in `claven/core/`: stop jobs, `stop_watch`, revoke the token at `https://oauth2.googleapis.com/revoke`, `DELETE FROM users` (FKs cascade), bump session version. Add a dashboard button with confirmation and update the privacy policy.
+- [x] M5 Account and data deletion. `POST /api/account/delete` → `claven/core/account.py::delete_account`: sets `cancel_job` so running scans stop, `stop_watch`, revokes the refresh token at `https://oauth2.googleapis.com/revoke` (Google steps best effort), `db.delete_user` (FKs cascade; the deleted users row also invalidates every session). Dashboard "Delete account" with confirmation; privacy policy describes immediate in-app deletion.
 - [x] M6 Vulnerable dependencies. Python (#134: fastapi 0.162, starlette 1.10, cryptography 50.0.2, PyJWT 2.15.1; `pip-audit` in CI). `web/` (#135: next 16.4.4, build tools moved to devDependencies, `npm audit --omit=dev` 37 → 0; `npm audit --omit=dev --audit-level=high` in CI). `.github/dependabot.yml` for pip, npm and Actions.
 
 Should-fix:

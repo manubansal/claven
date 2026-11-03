@@ -1,6 +1,6 @@
 import { CONTACT_EMAIL, OPERATOR_NAME } from "@/lib/constants";
 
-export const LAST_UPDATED = "October 27, 2026";
+export const LAST_UPDATED = "November 2, 2026";
 
 const content = `# Privacy Policy
 
@@ -79,7 +79,7 @@ Claven uses a session cookie to keep you signed in and a short-lived cookie to p
 
 Claven keeps your data while your account exists. **Disconnecting** from the dashboard stops Claven from processing your mail but keeps your sign-in credentials, so you can reconnect with one click.
 
-To have your account and all associated data **deleted**, email ${CONTACT_EMAIL} from the address you signed in with. We will delete your tokens, known-senders list, settings, processing state, and activity log within 30 days. Labels Claven applied in Gmail stay in your mailbox; you can remove them in Gmail at any time.
+To **delete** your account and all associated data, click **Delete account** at the bottom of the dashboard. Claven immediately deletes your tokens, known-senders list, settings, processing state, and activity log, stops watching your mailbox, and revokes its access with Google. If you can't sign in, email ${CONTACT_EMAIL} from the address you signed in with and we will do the same within 30 days of your request. Labels Claven applied in Gmail stay in your mailbox; you can remove them in Gmail at any time.
 
 You can also revoke Claven's access at any time from your [Google Account permissions page](https://myaccount.google.com/permissions). Once access is revoked, Claven can no longer read or change your mail.
 
