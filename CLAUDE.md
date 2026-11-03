@@ -74,7 +74,7 @@ To re-obtain a refresh token for this account (e.g. after token expiry), run `sc
 
 `claven.test.inbox@gmail.com` supports only **one active Gmail push watch** at a time. Concurrent `live` test runs will corrupt each other's `historyId` and cancel each other's watch in teardown.
 
-**CI is serialized** via `concurrency: group: live-gmail-tests` in both `ci.yml` and `deploy.yml` — GitHub Actions queues overlapping runs rather than running them in parallel.
+**Deploy is serialized** via `concurrency: group: live-gmail-tests` in `deploy.yml`, the only workflow that runs `live` tests — GitHub Actions queues overlapping runs rather than running them in parallel. `ci.yml` runs only `-m "not live"` tests and uses its own per-branch group, so CI runs (e.g. a batch of Dependabot PRs) can't cancel a queued deploy.
 
 **Local `make ci` is not serialized with GitHub CI.** Do not run `make ci` locally while a CI run is active on GitHub. Check GitHub Actions before starting a local CI run.
 

@@ -1,16 +1,31 @@
 # Weekly update PRs, so known vulnerabilities get fixed without waiting for a
 # review to find them (CASA M6). CI's pip-audit and npm audit gate the merge.
+# Updates are grouped so each ecosystem opens at most two PRs a week: one for
+# minor/patch bumps and one for major bumps, which are likelier to break.
 version: 2
 updates:
   - package-ecosystem: pip
     directory: /
     schedule:
       interval: weekly
+    groups:
+      pip-minor-patch:
+        update-types: [minor, patch]
+      pip-major:
+        update-types: [major]
   - package-ecosystem: npm
     directory: /web
     schedule:
       interval: weekly
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+      npm-major:
+        update-types: [major]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
