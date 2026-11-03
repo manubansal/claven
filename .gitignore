@@ -12,6 +12,7 @@ certs/
 web/docs/
 web/app/how-it-works/content.ts
 web/.open-next/
+web/.wrangler/
 .env.local
 .venv/
 .env.test
