@@ -6,6 +6,6 @@ starlette==1.10.0
 uvicorn[standard]==0.30.6
 psycopg2-binary==2.9.9
 alembic==1.13.3
-SQLAlchemy==2.0.55
+SQLAlchemy==2.1.6
 cryptography==50.0.2
 PyJWT==2.15.1
