@@ -6,9 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# CI runs only `-m "not live"` tests, so it stays out of the live-gmail-tests
+# group: GitHub keeps one queued run per group, and CI runs (Dependabot opens
+# many at once) would cancel a queued Deploy. A newer push supersedes older CI.
 concurrency:
-  group: live-gmail-tests
-  cancel-in-progress: false
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
