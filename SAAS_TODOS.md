@@ -722,19 +722,19 @@ Replaced the planned `auto_archive_unknown` boolean with a three-way per-user mo
 Review of 2026-11-02: PASS 30 · GAP 27 · UNKNOWN 7. Evidence, file references and suggested fixes are in `docs/casa-readiness.md` (M1–M6 below match its numbering). Suggested order: M2+M3+M4, then M1+M6, then M5.
 
 Must-fix (likely to fail the assessment):
-- [ ] M1 Security headers. API middleware in `claven/server.py`: HSTS, nosniff, `X-Frame-Options: DENY`, CSP `default-src 'none'; frame-ancestors 'none'`, `Referrer-Policy`, `Cache-Control: no-store` on `/api/*` and `/oauth/*`. Frontend `headers()` in `web/next.config.ts`: HSTS, CSP, XFO, `Referrer-Policy`, `Permissions-Policy`. Add tests.
+- [ ] M1 Security headers. API done (#134: `SecurityHeadersMiddleware` in `claven/server.py`); frontend still to do. API middleware in `claven/server.py`: HSTS, nosniff, `X-Frame-Options: DENY`, CSP `default-src 'none'; frame-ancestors 'none'`, `Referrer-Policy`, `Cache-Control: no-store` on `/api/*` and `/oauth/*`. Frontend `headers()` in `web/next.config.ts`: HSTS, CSP, XFO, `Referrer-Policy`, `Permissions-Policy`. Add tests.
 - [x] M2 Session expiry and revocation. JWT `iat`/`exp` (e.g. 7 days) plus a session-version claim checked against a new `users.session_version` column, incremented by logout and account deletion; cookie `max_age`; `pyjwt.decode(..., options={"require": ["exp"]})` (`claven/routes/auth.py:60-90,248-257`).
 - [x] M3 CSRF. Session cookie `SameSite=Lax` (`auth.py:248`; breaks `make dev-local-frontend` against the prod API); reject non-GET requests whose `Origin` isn't allow-listed, on every POST in `api.py` and `actions.py`.
 - [x] M4 Pub/Sub webhook identity. Accept only Claven's push service account (`PUBSUB_PUSH_SERVICE_ACCOUNT`, with `email_verified`); fail closed if it or `PUBSUB_AUDIENCE` is unset (`auth.py:30-57`). Take the history id from `get_profile()` instead of the notification (`internal.py:301,313`). (Not done: with only Claven's push account accepted, the notification comes from Gmail.)
 - [ ] M5 Account and data deletion (see also "User offboarding"). `POST /api/account/delete` with the logic in `claven/core/`: stop jobs, `stop_watch`, revoke the token at `https://oauth2.googleapis.com/revoke`, `DELETE FROM users` (FKs cascade), bump session version. Add a dashboard button with confirmation and update the privacy policy.
-- [ ] M6 Vulnerable dependencies. `web/`: bump `next`/`eslint-config-next`/`@opennextjs/cloudflare`, move `wrangler` and `shadcn` to devDependencies, get `npm audit --omit=dev` to 0 high/critical. Python: bump `fastapi` (starlette ≥0.49.1) and `cryptography` (≥44.0.1); confirm with `pip-audit`. Add `pip-audit` and `npm audit` CI gates plus `dependabot.yml`.
+- [ ] M6 Vulnerable dependencies. Python done (#134: fastapi 0.162, starlette 1.10, cryptography 50.0.2, PyJWT 2.15.1; `pip-audit` in CI); `web/` still to do. `web/`: bump `next`/`eslint-config-next`/`@opennextjs/cloudflare`, move `wrangler` and `shadcn` to devDependencies, get `npm audit --omit=dev` to 0 high/critical. Python: bump `fastapi` (starlette ≥0.49.1) and `cryptography` (≥44.0.1); confirm with `pip-audit`. Add `pip-audit` and `npm audit` CI gates plus `dependabot.yml`.
 
 Should-fix:
 - [ ] Event-log retention: call `db.trim_event_log` (the privacy policy promises "most recent 100 entries"; the function is never called)
 - [ ] Don't log correspondents' addresses at INFO (`scan.py:275`; the policy says only message IDs are logged); log `user_id` instead of email in `internal.py`, `api.py` and `auth.py`, or disclose it
-- [ ] Stop returning exception text to clients: `/healthz` (`server.py:198`) and OAuth `error_detail` (`auth.py:183,201,236`)
+- [ ] Stop returning exception text to clients: `/healthz` done (#134); OAuth `error_detail` (`auth.py:183,201,236`) remains
 - [ ] Constant-time compare for `INTERNAL_API_SECRET` (`auth.py:26`, `secrets.compare_digest`)
-- [ ] Disable `/docs`, `/redoc` and `/openapi.json` in prod (`server.py:154`)
+- [x] Disable `/docs`, `/redoc` and `/openapi.json` in prod (`server.py:154`)
 - [x] Remove `http://localhost:3000` from prod `CORS_EXTRA_ORIGINS` (`deploy.yml:98`)
 - [ ] Read-only prod DB role: revoke SELECT on `gmail_tokens` and `sent_recipients` (`scripts/create_readonly_role.sql`)
 - [ ] Narrow the deployer service account roles (`scripts/setup-gcp.sh:62-74`)

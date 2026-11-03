@@ -46,6 +46,10 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
+      # Fails on any known vulnerability in the runtime dependencies (CASA M6).
+      - name: Audit Python dependencies
+        run: pip-audit -r requirements.txt
+
       - name: Run migrations
         env:
           DATABASE_URL: postgresql://claven:claven@localhost:5432/claven_test

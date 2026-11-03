@@ -151,7 +151,48 @@ async def lifespan(app):
         _active_threads.clear()
     logger.info("Worker shutdown complete (pid=%d)", _worker_id)
 
-app = FastAPI(title="Claven", lifespan=lifespan)
+# No interactive docs or schema in any environment: they aren't used, and a
+# security scan reports them as exposed.
+app = FastAPI(title="Claven", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+
+_SECURITY_HEADERS = [
+    (b"strict-transport-security", b"max-age=31536000; includeSubDomains"),
+    (b"x-content-type-options", b"nosniff"),
+    (b"x-frame-options", b"DENY"),
+    # The API serves JSON and redirects only, never pages or scripts.
+    (b"content-security-policy", b"default-src 'none'; frame-ancestors 'none'"),
+    (b"referrer-policy", b"no-referrer"),
+]
+_NO_STORE_PREFIXES = ("/api/", "/oauth/")
+
+
+class SecurityHeadersMiddleware:
+    """Add security headers to every response, and no-store to API and OAuth responses.
+
+    Plain ASGI so headers go out with the response start and streamed
+    responses (the dashboard's /api/events) aren't buffered.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        no_store = scope["path"].startswith(_NO_STORE_PREFIXES)
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = [(k, v) for k, v in message.get("headers", [])
+                           if not (no_store and k.lower() == b"cache-control")]
+                headers += _SECURITY_HEADERS
+                if no_store:
+                    headers.append((b"cache-control", b"no-store"))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
 
 def _allowed_origins() -> list[str]:
     origins = [os.environ.get("FRONTEND_URL", "https://claven.app")]
@@ -167,6 +208,8 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Authorization", "Content-Type"],
 )
+# Added last so it wraps CORS too: preflight responses get the headers as well.
+app.add_middleware(SecurityHeadersMiddleware)
 
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
@@ -192,11 +235,9 @@ def healthz():
                 cur.execute("SELECT 1")
         return {"status": "ok", "db": "connected"}
     except Exception as exc:
+        # The error can name hosts and users; it goes to the logs only.
         logger.error("Health check failed: %s", exc)
-        return JSONResponse(
-            status_code=503,
-            content={"status": "error", "db": "unreachable", "detail": str(exc)},
-        )
+        return JSONResponse(status_code=503, content={"status": "error", "db": "unreachable"})
 
 
 # ── Include route modules ───────────────────────────────────────────────────
