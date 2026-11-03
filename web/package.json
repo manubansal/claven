@@ -43,7 +43,7 @@
     "shadcn": "^4.5.0",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "vitest": "^4.1.5",
+    "vitest": "^5.0.5",
     "wrangler": "^4.156.2"
   }
 }
