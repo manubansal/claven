@@ -263,16 +263,17 @@ async def webhook_gmail(request: Request):
     with _srv.db.get_connection() as conn:
         user = _srv.db.get_user_by_email(conn, email)
         if not user:
-            logger.info("Webhook for unknown user %s — acknowledging", email)
+            logger.debug("webhook_gmail: unknown user %s", email)
+            logger.info("Webhook for unknown user — acknowledging")
             return {"status": "ok", "detail": "unknown user"}
 
         if not _srv.db.try_lock_user_scan(conn, user["id"]):
-            logger.info("Webhook for %s skipped — locked by another instance", email)
+            logger.info("Webhook for %s skipped — locked by another instance", user["id"])
             return {"status": "ok", "detail": "locked"}
 
         stored_history_id = _srv.db.get_history_id(conn, user["id"])
         if not stored_history_id:
-            logger.info("No history_id for %s — skipping", email)
+            logger.info("No history_id for %s — skipping", user["id"])
             return {"status": "ok", "detail": "no history_id"}
 
         # While a scan runs, every label it applies triggers a push. Leave the
@@ -283,7 +284,7 @@ async def webhook_gmail(request: Request):
         if scan_progress["status"] != "complete":
             if _srv._needs_sent_scan(scan_progress):
                 logger.info("Webhook for %s: sent scan unfinished (status=%s), restarting it",
-                            email, scan_progress["status"])
+                            user["id"], scan_progress["status"])
                 _srv.db.set_sent_scan_status(conn, user["id"], "in_progress")
                 # Release this webhook's scan_state lock first, or the scan's
                 # SKIP LOCKED check sees it and skips itself.

@@ -524,7 +524,7 @@ def api_connect(request: Request):
             # sees the scan running and doesn't start a second one.
             _srv.db.set_sent_scan_status(conn, session["user_id"], "in_progress")
         except Exception as exc:
-            logger.exception("Connect failed for %s: %s", session["email"], exc)
+            logger.exception("Connect failed for %s: %s", session["user_id"], exc)
             raise HTTPException(status_code=500, detail="Failed to start Gmail watch")
     # Kick off sent scan only — it chains into inbox scan on completion.
     # Do NOT spawn a separate inbox scan thread: it races with the sent
@@ -546,7 +546,7 @@ def api_disconnect(request: Request):
             service = _srv.auth.get_service(conn, session["user_id"], os.environ["TOKEN_ENCRYPTION_KEY"])
             _srv.stop_watch(service)
         except Exception as exc:
-            logger.warning("stop_watch failed during disconnect for %s: %s", session["email"], exc)
+            logger.warning("stop_watch failed during disconnect for %s: %s", session["user_id"], exc)
         _srv.db.clear_watch_state(conn, session["user_id"])
     return JSONResponse({"ok": True})
 

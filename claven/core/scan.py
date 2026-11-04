@@ -272,7 +272,8 @@ def relabel_scan(service, user_id, label_configs, label_id_cache, should_continu
                 total_relabeled += swapped
                 _interruptible_sleep(1, shutdown_event)
 
-            logger.info("Relabel scan: %s → %d messages relabeled", sender, len(msg_ids))
+            logger.debug("relabel_scan: sender=%s relabeled", sender)
+            logger.info("Relabel scan: %d messages relabeled for one sender", len(msg_ids))
         else:
             logger.debug("relabel_scan: sender=%s — no unknown-sender messages found", sender)
 

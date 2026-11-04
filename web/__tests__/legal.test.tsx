@@ -41,6 +41,12 @@ describe("Privacy policy page", () => {
     expect(container.textContent).toContain(CONTACT_EMAIL);
   });
 
+  it("says what server logs contain, and that it isn't email addresses", () => {
+    const { container } = render(<PrivacyPage />);
+    expect(container.textContent).toMatch(/internal account ID/i);
+    expect(container.textContent).toMatch(/rather than email addresses/i);
+  });
+
   it("explains deleting the account from the dashboard, with immediate deletion and token revocation", () => {
     const { container } = render(<PrivacyPage />);
     expect(container.textContent).toMatch(/Delete account/);

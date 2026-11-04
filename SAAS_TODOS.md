@@ -730,8 +730,8 @@ Must-fix (likely to fail the assessment):
 - [x] M6 Vulnerable dependencies. Python (#134: fastapi 0.162, starlette 1.10, cryptography 50.0.2, PyJWT 2.15.1; `pip-audit` in CI). `web/` (#135: next 16.4.4, build tools moved to devDependencies, `npm audit --omit=dev` 37 → 0; `npm audit --omit=dev --audit-level=high` in CI). `.github/dependabot.yml` for pip, npm and Actions.
 
 Should-fix:
-- [ ] Event-log retention: call `db.trim_event_log` (the privacy policy promises "most recent 100 entries"; the function is never called)
-- [ ] Don't log correspondents' addresses at INFO (`scan.py:275`; the policy says only message IDs are logged); log `user_id` instead of email in `internal.py`, `api.py` and `auth.py`, or disclose it
+- [x] Event-log retention: `db.log_event` trims to the newest 100 per user (`EVENT_LOG_KEEP`), as the privacy policy promises
+- [x] No email addresses in INFO+ logs: correspondents only at DEBUG, users by `user_id`, `email` dropped from the JSON formatter; `tests/unit/test_log_privacy.py` guards it. Privacy policy says logs hold message IDs and account IDs
 - [ ] Stop returning exception text to clients: `/healthz` done (#134); OAuth `error_detail` (`auth.py:183,201,236`) remains
 - [ ] Constant-time compare for `INTERNAL_API_SECRET` (`auth.py:26`, `secrets.compare_digest`)
 - [x] Disable `/docs`, `/redoc` and `/openapi.json` in prod (`server.py:154`)

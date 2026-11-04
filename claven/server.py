@@ -53,7 +53,7 @@ class _CloudJsonFormatter(logging.Formatter):
             "message": record.getMessage(),
             "logger": record.name,
         }
-        for field in ("user_id", "event", "email"):
+        for field in ("user_id", "event"):
             if val := getattr(record, field, None):
                 entry[field] = val
         if record.exc_info and record.exc_info[0]:
