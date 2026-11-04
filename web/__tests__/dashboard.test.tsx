@@ -730,6 +730,53 @@ describe("Dashboard page", () => {
       expect(es.close).toHaveBeenCalled();
     });
 
+    describe("hidden tab", () => {
+      // An open stream holds a database connection, which keeps the database
+      // awake; a forgotten background tab shouldn't do that.
+      let visibility: DocumentVisibilityState = "visible";
+      beforeEach(() => {
+        visibility = "visible";
+        Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
+      });
+      afterEach(() => {
+        delete (document as { visibilityState?: unknown }).visibilityState;
+      });
+      function setVisibility(v: DocumentVisibilityState) {
+        visibility = v;
+        document.dispatchEvent(new Event("visibilitychange"));
+      }
+      const meCalls = () => vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/api/me")).length;
+
+      it("closes the stream when the tab is hidden", async () => {
+        mockFetch({ ok: true, body: DEFAULT_ME });
+        render(<DashboardPage />);
+        const es = await waitForEventSource();
+        setVisibility("hidden");
+        expect(es.close).toHaveBeenCalled();
+      });
+
+      it("reopens the stream and refreshes when the tab is shown again", async () => {
+        mockFetch({ ok: true, body: DEFAULT_ME });
+        render(<DashboardPage />);
+        const first = await waitForEventSource();
+        setVisibility("hidden");
+        const before = meCalls();
+        setVisibility("visible");
+        await waitFor(() => expect(lastEventSource).not.toBe(first));
+        expect(lastEventSource!.close).not.toHaveBeenCalled();
+        await waitFor(() => expect(meCalls()).toBeGreaterThan(before));
+      });
+
+      it("doesn't open a stream while the page loads in a background tab", async () => {
+        visibility = "hidden";
+        mockFetch({ ok: true, body: DEFAULT_ME });
+        render(<DashboardPage />);
+        await screen.findByText("user@example.com");
+        await new Promise((r) => setTimeout(r, 50));
+        expect(lastEventSource).toBeNull();
+      });
+    });
+
     it("does not crash on SSE error", async () => {
       mockFetch({ ok: true, body: DEFAULT_ME });
       render(<DashboardPage />);

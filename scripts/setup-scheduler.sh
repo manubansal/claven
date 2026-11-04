@@ -53,6 +53,8 @@ create_or_update_job "claven-renew-watches" "0 6 * * *" "${API_BASE}/internal/re
 # Hourly poll fallback
 create_or_update_job "claven-poll" "0 * * * *" "${API_BASE}/internal/poll"
 
-create_or_update_job "claven-sunset" "*/15 * * * *" "${API_BASE}/internal/sunset"
+# Same schedule as claven-poll: each run wakes the Neon database (billed while
+# awake, suspended after 5 idle minutes), so the two jobs share one wake.
+create_or_update_job "claven-sunset" "0 * * * *" "${API_BASE}/internal/sunset"
 
 echo "Scheduler jobs configured."

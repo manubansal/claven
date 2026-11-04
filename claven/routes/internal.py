@@ -161,8 +161,8 @@ def internal_sunset(request: Request):
     than the user's timer is archived, and every message still waiting carries a
     countdown label (c/4h, ...) in place of the unknown label. For users who left
     Sunset, the countdown labels are deleted and their mail goes back to the
-    unknown label. Idempotent. Intended to be triggered every
-    15 minutes by Cloud Scheduler.
+    unknown label. Idempotent. Triggered hourly by Cloud Scheduler, alongside
+    /internal/poll so both share one database wake.
     """
     _require_internal_auth(request)
     now = datetime.now(timezone.utc)
