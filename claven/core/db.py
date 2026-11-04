@@ -559,12 +559,13 @@ def get_auto_archive_unknown(conn, user_id: str) -> bool:
 # ── Event log ─────────────────────────────────────────────────────────────────
 
 def log_event(conn, user_id: str, event_type: str, message: str) -> None:
-    """Write an event to the event log."""
+    """Write an event to the event log, keeping only the user's most recent EVENT_LOG_KEEP."""
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO event_log (user_id, event_type, message) VALUES (%s, %s, %s)",
             (user_id, event_type, message),
         )
+    trim_event_log(conn, user_id)
 
 
 def get_recent_events(conn, user_id: str, limit: int = 30) -> list[dict]:
@@ -580,12 +581,16 @@ def get_recent_events(conn, user_id: str, limit: int = 30) -> list[dict]:
         ]
 
 
-def trim_event_log(conn, user_id: str, keep: int = 100) -> None:
+# The privacy policy promises the activity log holds the most recent 100 entries.
+EVENT_LOG_KEEP = 100
+
+
+def trim_event_log(conn, user_id: str, keep: int = EVENT_LOG_KEEP) -> None:
     """Delete old events beyond the keep limit."""
     with conn.cursor() as cur:
         cur.execute(
             """DELETE FROM event_log WHERE user_id = %s AND id NOT IN (
-                SELECT id FROM event_log WHERE user_id = %s ORDER BY timestamp DESC LIMIT %s
+                SELECT id FROM event_log WHERE user_id = %s ORDER BY timestamp DESC, id DESC LIMIT %s
             )""",
             (user_id, user_id, keep),
         )

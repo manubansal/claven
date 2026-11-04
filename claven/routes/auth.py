@@ -273,14 +273,14 @@ def oauth_callback(
             elif creds.refresh_token:
                 # Returning user with a fresh refresh token — update stored
                 # credentials. This handles re-auth after token revocation.
-                logger.info("Updating credentials for %s (new refresh token)", email)
+                logger.info("Updating credentials for %s (new refresh token)", user_id)
                 _srv.auth.store_credentials(conn, user_id, creds, os.environ["TOKEN_ENCRYPTION_KEY"])
     except Exception as exc:
-        logger.exception("Signup failed for %s: %s", email, exc)
+        logger.debug("oauth_callback: signup failed for %s", email)
+        logger.exception("Signup failed: %s", exc)
         return _error_redirect(base, "signup_failed", str(exc))
 
-    logger.info("OAuth complete for %s (user_id=%s)", email, user_id,
-                extra={"event": "oauth_complete", "user_id": user_id, "email": email})
+    logger.info("OAuth complete for %s", user_id, extra={"event": "oauth_complete", "user_id": user_id})
 
     # No scan triggered here — /api/me handles retrigger logic on first
     # dashboard load, respecting cancel state and exclusive job ownership.

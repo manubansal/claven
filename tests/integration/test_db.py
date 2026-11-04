@@ -130,6 +130,24 @@ class TestDeleteUser:
         db.delete_user(db_conn, "00000000-0000-0000-0000-000000000000")
 
 
+class TestEventLogRetention:
+    def test_keeps_only_the_newest_100_events(self, db_conn):
+        """The privacy policy promises the activity log holds the most recent 100 entries."""
+        user_id = db.upsert_user(db_conn, "events-cap@example.com")
+        other_id = db.upsert_user(db_conn, "events-other@example.com")
+        db.log_event(db_conn, other_id, "scan", "other user's event")
+        for i in range(105):
+            db.log_event(db_conn, user_id, "scan", f"event {i}")
+
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT message FROM event_log WHERE user_id = %s ORDER BY id", (user_id,))
+            messages = [row[0] for row in cur.fetchall()]
+            cur.execute("SELECT count(*) FROM event_log WHERE user_id = %s", (other_id,))
+            other_count = cur.fetchone()[0]
+        assert messages == [f"event {i}" for i in range(5, 105)]
+        assert other_count == 1
+
+
 class TestScanState:
     def test_set_and_get_history_id(self, db_conn):
         user_id = db.upsert_user(db_conn, "history@example.com")

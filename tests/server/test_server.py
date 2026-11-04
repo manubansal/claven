@@ -2323,6 +2323,16 @@ class TestCloudJsonFormatter:
         assert output["user_id"] == "uid-1"
         assert output["event"] == "inbox_scan_complete"
 
+    def test_never_emits_email(self):
+        """Users are identified by user_id in logs; the privacy policy promises no addresses."""
+        import json
+        from claven.server import _CloudJsonFormatter
+        record = logging.LogRecord("test", logging.INFO, "", 0, "signed in", (), None)
+        record.user_id = "uid-1"
+        record.email = "user@example.com"
+        output = json.loads(_CloudJsonFormatter().format(record))
+        assert "email" not in output
+
     def test_includes_exception(self):
         import json
         from claven.server import _CloudJsonFormatter

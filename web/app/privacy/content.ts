@@ -1,6 +1,6 @@
 import { CONTACT_EMAIL, OPERATOR_NAME } from "@/lib/constants";
 
-export const LAST_UPDATED = "November 2, 2026";
+export const LAST_UPDATED = "November 4, 2026";
 
 const content = `# Privacy Policy
 
@@ -55,7 +55,7 @@ Claven does **not**:
 - your settings (scan scope, inbox mode, Sunset timer);
 - a short activity log shown on your dashboard (the most recent 100 entries).
 
-Claven does not store message bodies, attachments, or subject lines. Message IDs may appear in operational server logs, which are kept by our hosting provider for a limited period (normally 30 days) for debugging and security.
+Claven does not store message bodies, attachments, or subject lines. Operational server logs record message IDs and your internal account ID rather than email addresses, and are kept by our hosting provider for a limited period (normally 30 days) for debugging and security.
 
 ## Who processes your data
 
