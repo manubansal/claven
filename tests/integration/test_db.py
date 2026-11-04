@@ -106,6 +106,30 @@ class TestSessionVersion:
         assert db.get_session_version(db_conn, "00000000-0000-0000-0000-000000000000") is None
 
 
+class TestDeleteUser:
+    def test_removes_user_and_all_their_data(self, db_conn):
+        user_id = db.upsert_user(db_conn, "delete-me@example.com")
+        other_id = db.upsert_user(db_conn, "keep-me@example.com")
+        for uid in (user_id, other_id):
+            db.store_tokens(db_conn, uid, b"a", b"r", None, [])
+            db.set_history_id(db_conn, uid, 1)
+            db.add_known_sender(db_conn, uid, "friend@example.com")
+            db.log_event(db_conn, uid, "scan", "started")
+
+        db.delete_user(db_conn, user_id)
+
+        with db_conn.cursor() as cur:
+            for table, key in (("users", "id"), ("gmail_tokens", "user_id"), ("scan_state", "user_id"),
+                               ("sent_recipients", "user_id"), ("event_log", "user_id")):
+                cur.execute(f"SELECT count(*) FROM {table} WHERE {key} = %s", (user_id,))
+                assert cur.fetchone()[0] == 0, table
+                cur.execute(f"SELECT count(*) FROM {table} WHERE {key} = %s", (other_id,))
+                assert cur.fetchone()[0] == 1, table
+
+    def test_missing_user_is_a_no_op(self, db_conn):
+        db.delete_user(db_conn, "00000000-0000-0000-0000-000000000000")
+
+
 class TestScanState:
     def test_set_and_get_history_id(self, db_conn):
         user_id = db.upsert_user(db_conn, "history@example.com")

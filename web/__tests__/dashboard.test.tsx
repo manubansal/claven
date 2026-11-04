@@ -334,6 +334,52 @@ describe("Dashboard page", () => {
     });
   });
 
+  describe("delete account", () => {
+    const ME = { ok: true, body: { email: "user@example.com", connected: true, history_id: 12345 } };
+
+    async function openDialog() {
+      render(<DashboardPage />);
+      await userEvent.click(await screen.findByRole("button", { name: /delete account/i }));
+      return screen.findByRole("alertdialog");
+    }
+
+    it("asks for confirmation before deleting", async () => {
+      mockFetch(ME);
+      const dialog = await openDialog();
+      expect(dialog).toHaveTextContent(/can't be undone/i);
+      expect(dialog).toHaveTextContent(/revoke/i);
+      await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
+      expect(vi.mocked(fetch)).not.toHaveBeenCalledWith(`${API_URL}/api/account/delete`, expect.anything());
+    });
+
+    it("deletes the account and returns home on confirm", async () => {
+      mockFetch(ME);
+      await openDialog();
+      await userEvent.click(screen.getByRole("button", { name: /delete my account/i }));
+      await waitFor(() =>
+        expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+          `${API_URL}/api/account/delete`,
+          expect.objectContaining({ method: "POST", credentials: "include" }),
+        ),
+      );
+      await waitFor(() => expect(replaceMock).toHaveBeenCalledWith("/"));
+    });
+
+    it("shows an error and stays put when deletion fails", async () => {
+      mockFetch(ME);
+      await openDialog();
+      const meFetch = vi.mocked(fetch).getMockImplementation()!;
+      vi.mocked(fetch).mockImplementation((url, init) =>
+        String(url).includes("/api/account/delete")
+          ? Promise.resolve({ ok: false, status: 500, json: async () => ({}) } as Response)
+          : meFetch(url, init),
+      );
+      await userEvent.click(screen.getByRole("button", { name: /delete my account/i }));
+      await screen.findByText(/couldn't delete your account/i);
+      expect(replaceMock).not.toHaveBeenCalled();
+    });
+  });
+
   describe("stats", () => {
     it("shows known senders count after rule title and description", async () => {
       mockFetch(

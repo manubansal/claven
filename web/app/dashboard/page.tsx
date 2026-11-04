@@ -146,6 +146,54 @@ function ArchiveButton({ label, disabled, onConfirm }: { label: string; disabled
   );
 }
 
+function DeleteAccountButton() {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  async function handleDelete() {
+    setDeleting(true);
+    setFailed(false);
+    const res = await fetch(`${API_URL}/api/account/delete`, { method: "POST", credentials: "include" }).catch(() => null);
+    if (res?.ok) {
+      router.replace("/");
+      return;
+    }
+    setDeleting(false);
+    setFailed(true);
+  }
+
+  return (
+    <AlertDialog open={open} onOpenChange={(next) => { if (!deleting) setOpen(next); }}>
+      <AlertDialogTrigger className="text-xs text-muted-foreground hover:text-destructive transition-colors">
+        Delete account
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete your Claven account?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This permanently deletes everything Claven stores about you: your Gmail access tokens, known senders, settings and activity log. Claven also stops watching your inbox and revokes its access to your Gmail. Labels already applied stay in Gmail, where you can remove them. This can&apos;t be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {failed && (
+          <p className="text-sm text-destructive">We couldn&apos;t delete your account. Please try again.</p>
+        )}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+          <button
+            className={cn(buttonVariants({ variant: "destructive" }))}
+            disabled={deleting}
+            onClick={handleDelete}
+          >
+            {deleting ? "Deleting…" : "Delete my account"}
+          </button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 function InfoSection({
   icon: Icon,
   iconElement,
@@ -792,6 +840,9 @@ export default function DashboardPage() {
             </details>
           )}
 
+          <div className="w-full flex justify-end">
+            <DeleteAccountButton />
+          </div>
         </div>
       </main>
     </>

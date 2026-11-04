@@ -40,6 +40,13 @@ describe("Privacy policy page", () => {
     expect(container.textContent).toMatch(/delet/i);
     expect(container.textContent).toContain(CONTACT_EMAIL);
   });
+
+  it("explains deleting the account from the dashboard, with immediate deletion and token revocation", () => {
+    const { container } = render(<PrivacyPage />);
+    expect(container.textContent).toMatch(/Delete account/);
+    expect(container.textContent).toMatch(/immediately/i);
+    expect(container.textContent).toMatch(/revokes/i);
+  });
 });
 
 describe("Terms of service page", () => {
