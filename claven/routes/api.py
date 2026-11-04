@@ -170,7 +170,7 @@ def api_me(request: Request):
             inbox_labeled_unknown_shallow_count = len(inbox_unknown_msgs)
             inbox_labeled_unknown_has_more = "nextPageToken" in inbox_unknown_data
             # Countdown labels are only on mail waiting in the inbox (the sweep swaps them back to
-            # the unknown label within 15 minutes of the mail leaving), so their totals are inbox counts.
+            # the unknown label within an hour of the mail leaving), so their totals are inbox counts.
             inbox_labeled_unknown_shallow_count += sum(countdown_totals.values())
 
             newest_detail = b2.get("newest_detail")

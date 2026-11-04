@@ -315,23 +315,48 @@ export default function DashboardPage() {
   // batch commit via Postgres NOTIFY. No polling, no wasted API calls.
   // Debounced: rapid events (multiple batches/second) collapse into one
   // loadData call every 3 seconds to avoid flooding /api/me.
+  // Open only while the tab is visible: each stream holds a database
+  // connection, which keeps Neon from suspending (and billing) compute.
   useEffect(() => {
     if (state.status !== "loaded") return;
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-    const es = new EventSource(`${API_URL}/api/events`, { withCredentials: true });
-    es.onmessage = () => {
-      if (!debounceTimer) {
-        debounceTimer = setTimeout(() => {
-          debounceTimer = null;
-          loadData();
-        }, 3_000);
+    let es: EventSource | null = null;
+
+    function open() {
+      if (es) return;
+      es = new EventSource(`${API_URL}/api/events`, { withCredentials: true });
+      es.onmessage = () => {
+        if (!debounceTimer) {
+          debounceTimer = setTimeout(() => {
+            debounceTimer = null;
+            loadData();
+          }, 3_000);
+        }
+      };
+      es.onerror = () => {
+        // SSE disconnected — EventSource auto-reconnects (browser default)
+      };
+    }
+
+    function close() {
+      es?.close();
+      es = null;
+    }
+
+    function onVisibilityChange() {
+      if (document.visibilityState === "hidden") {
+        close();
+      } else if (!es) {
+        open();
+        loadData(); // catch up on whatever changed while the stream was closed
       }
-    };
-    es.onerror = () => {
-      // SSE disconnected — EventSource auto-reconnects (browser default)
-    };
+    }
+
+    if (document.visibilityState !== "hidden") open();
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
-      es.close();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      close();
       if (debounceTimer) clearTimeout(debounceTimer);
     };
   }, [state.status]);
