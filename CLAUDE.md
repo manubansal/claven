@@ -81,6 +81,6 @@ To re-obtain a refresh token for this account (e.g. after token expiry), run `sc
 ## Key decisions
 
 - **Serverless platform:** Cloud Run (`min-instances=0` to start; upgrade to 1 when interactive CLI latency matters)
-- **Database:** Neon free plan Postgres with PgBouncer connection pooling
+- **Database:** Neon Free plan Postgres with PgBouncer connection pooling, in its own Neon org (`claven`, no card) with compute capped at 0.25 CU. Free never bills but suspends the project for the rest of the month at 100 CU-hours or 5 GB transfer; `.github/workflows/neon-usage.yml` checks the pace every six hours and opens a "Neon usage" issue on a warning
 - **Notification modes:** push (Pub/Sub, primary), pull (Pub/Sub pull subscription, fallback), poll (Gmail History API, local dev fallback)
 - **Initial scan vs. incremental processing:** the one-time scan uses `list_messages`; all incremental processing uses `list_history` since a stored `historyId` — these are distinct code paths, never conflated
