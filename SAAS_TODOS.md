@@ -737,8 +737,8 @@ Should-fix:
 - [x] Disable `/docs`, `/redoc` and `/openapi.json` in prod (`server.py:154`)
 - [x] Remove `http://localhost:3000` from prod `CORS_EXTRA_ORIGINS` (`deploy.yml:98`)
 - [x] Read-only prod DB role: `scripts/create_readonly_role.sql` revokes SELECT on `gmail_tokens` and `sent_recipients` (the role isn't in the current Neon project; recreate it with the script when needed)
-- [ ] Narrow the deployer service account roles (`scripts/setup-gcp.sh:62-74`)
-- [ ] Separate CI secrets from prod; put the prod smoke-test `SESSION_SECRET` behind a protected GitHub environment
+- [x] Least-privilege GCP identities: Cloud Run runs as `claven-run` (reads only its six secrets) instead of the default compute account (Editor); `claven-deploy` keeps `run.developer`, `artifactregistry.writer`, `cloudscheduler.admin`, act-as on `claven-run` only, and read access to `internal-api-secret` only
+- [x] Separate CI secrets from prod: CI gets no secrets; deploy jobs run in the `production` environment (main only), which holds `DATABASE_URL`, `SESSION_SECRET` and the GCP deploy identity, and Workload Identity accepts only that environment
 - [x] Log 401s from `_get_session`, `_require_internal_auth` and the webhook: method, path and reason with event `auth_rejected`, never the credential (Cloud Run's request log has the IP)
 - [x] Alert on spikes of `auth_rejected` (>100 in 5 min) and `rate_limited` (>10 in 5 min): log-based metrics and Cloud Monitoring alert policies emailing the owner, set up 2026-11-05
 - [x] Rate limiting (per instance, 429 with Retry-After): `/oauth/start` 30/min per client IP, `/api/me` 120/min and `/api/top-senders` 20/min per user

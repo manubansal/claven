@@ -61,13 +61,8 @@ jobs:
       - name: Run tests
         env:
           PYTEST_DATABASE_URL: postgresql://claven:claven@localhost:5432/claven_test
-          TEST_GMAIL_REFRESH_TOKEN: ${{ secrets.TEST_GMAIL_REFRESH_TOKEN }}
-          TEST_GMAIL_EMAIL: ${{ secrets.TEST_GMAIL_EMAIL }}
-          PUBSUB_TOPIC: ${{ secrets.PUBSUB_TOPIC }}
-          OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
-          OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
-          TOKEN_ENCRYPTION_KEY: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
-          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+        # No secrets: these tests set their own test values, and CI runs on every
+        # branch. Prod credentials live in the production environment (deploy.yml).
         run: pytest --tb=short -m "not live"
 
       - uses: actions/setup-node@v4
