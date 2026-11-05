@@ -2992,3 +2992,100 @@ class TestSunsetForLiveLabeling:
             assert _sunset_for_live_labeling(MagicMock(), MagicMock(), "uid-1") is None
         mock_cache.assert_not_called()
         mock_db.set_sunset_countdown_active.assert_not_called()
+
+
+class TestCasaHardening:
+    """Errors don't reach clients, rejected auth is logged, and hot endpoints are rate limited."""
+
+    def test_oauth_failure_redirect_carries_no_exception_text(self):
+        with patch.dict("os.environ", _ENV):
+            with TestClient(app) as client:
+                state = client.get("/oauth/start", follow_redirects=False).cookies.get("oauth_state")
+                client.cookies.set("oauth_state", state)
+                with patch("claven.server.Flow") as mock_flow_cls:
+                    mock_flow_cls.from_client_config.return_value.fetch_token.side_effect = Exception(
+                        "invalid_grant for client 123 at host db.internal")
+                    response = client.get(f"/oauth/callback?code=abc&state={state}", follow_redirects=False)
+        location = response.headers["location"]
+        assert "error=token_exchange_failed" in location
+        assert "error_detail" not in location
+        assert "invalid_grant" not in location
+
+    def test_internal_secret_is_compared_in_constant_time(self):
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.routes.auth.secrets.compare_digest", return_value=False) as cmp:
+                with TestClient(app) as client:
+                    response = client.post("/internal/poll", headers={"Authorization": "Bearer test-internal-secret"})
+        assert response.status_code == 401
+        cmp.assert_called_once()
+
+    def test_rejected_session_is_logged_without_the_token(self, caplog):
+        caplog.set_level(logging.INFO, logger="claven.routes.auth")
+        with patch.dict("os.environ", _ENV):
+            with TestClient(app) as client:
+                client.cookies.set("session", "not-a-jwt-secret-value")
+                assert client.get("/api/me").status_code == 401
+        records = [r for r in caplog.records if getattr(r, "event", None) == "auth_rejected"]
+        assert len(records) == 1
+        assert "/api/me" in records[0].getMessage()
+        assert "not-a-jwt-secret-value" not in caplog.text
+
+    def test_rejected_internal_call_is_logged(self, caplog):
+        caplog.set_level(logging.INFO, logger="claven.routes.auth")
+        with patch.dict("os.environ", _ENV):
+            with TestClient(app) as client:
+                client.post("/internal/poll", headers={"Authorization": "Bearer wrong-secret-value"})
+        records = [r for r in caplog.records if getattr(r, "event", None) == "auth_rejected"]
+        assert len(records) == 1
+        assert "/internal/poll" in records[0].getMessage()
+        assert "wrong-secret-value" not in caplog.text
+
+    def test_oauth_start_is_rate_limited_per_client_ip(self):
+        from claven.routes.auth import OAUTH_START_LIMIT
+        with patch.dict("os.environ", _ENV):
+            with TestClient(app) as client:
+                headers = {"X-Forwarded-For": "203.0.113.7"}
+                for _ in range(OAUTH_START_LIMIT.limit):
+                    assert client.get("/oauth/start", headers=headers, follow_redirects=False).status_code in (302, 307)
+                refused = client.get("/oauth/start", headers=headers, follow_redirects=False)
+                other_ip = client.get("/oauth/start", headers={"X-Forwarded-For": "203.0.113.8"}, follow_redirects=False)
+        assert refused.status_code == 429
+        assert int(refused.headers["retry-after"]) > 0
+        assert other_ip.status_code in (302, 307)
+
+    def test_client_ip_is_the_one_googles_front_end_added(self):
+        """Cloud Run's front end appends the caller's address; anything before it came from the caller."""
+        from claven.routes.auth import OAUTH_START_LIMIT
+        with patch.dict("os.environ", _ENV):
+            with TestClient(app) as client:
+                for i in range(OAUTH_START_LIMIT.limit):
+                    client.get("/oauth/start", headers={"X-Forwarded-For": f"10.0.0.{i}, 203.0.113.7"},
+                               follow_redirects=False)
+                refused = client.get("/oauth/start", headers={"X-Forwarded-For": "1.2.3.4, 203.0.113.7"},
+                                     follow_redirects=False)
+        assert refused.status_code == 429
+
+    def _get_as_user(self, path, times, user_id="uid-1"):
+        with patch.dict("os.environ", _ENV):
+            with patch("claven.server.db") as mock_db, patch("claven.server.auth") as mock_auth:
+                _fake_db_ctx(mock_db)
+                mock_db.get_user_by_id.return_value = {"id": user_id, "email": "user@example.com"}
+                svc = MagicMock()
+                svc.users.return_value.messages.return_value.list.return_value.execute.return_value = {"messages": []}
+                mock_auth.get_service.return_value = svc
+                with TestClient(app) as client:
+                    client.cookies.set("session", _make_session_token(user_id=user_id))
+                    return [client.get(path).status_code for _ in range(times)]
+
+    def test_api_me_is_rate_limited_per_user(self):
+        from claven.routes.api import ME_LIMIT
+        codes = self._get_as_user("/api/me", ME_LIMIT.limit + 1)
+        assert codes[:-1] == [200] * ME_LIMIT.limit
+        assert codes[-1] == 429
+        assert self._get_as_user("/api/me", 1, user_id="uid-2") == [200]
+
+    def test_top_senders_is_rate_limited_per_user(self):
+        from claven.routes.api import TOP_SENDERS_LIMIT
+        codes = self._get_as_user("/api/top-senders", TOP_SENDERS_LIMIT.limit + 1)
+        assert codes[:-1] == [200] * TOP_SENDERS_LIMIT.limit
+        assert codes[-1] == 429

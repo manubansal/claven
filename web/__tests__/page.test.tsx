@@ -82,16 +82,11 @@ describe("Home page", () => {
       expect(screen.getByText(/token_exchange_failed/)).toBeInTheDocument();
     });
 
-    it("shows error_detail when provided", () => {
-      mockParams({ error: "token_exchange_failed", error_detail: "invalid_grant: Token has been expired" });
+    it("never shows text from the URL beyond the known error code", () => {
+      // The API no longer sends details, and a crafted link must not put its own words on the page.
+      mockParams({ error: "token_exchange_failed", error_detail: "Call 555-0100 to restore your account" });
       render(<Home />);
-      expect(screen.getByText(/invalid_grant: Token has been expired/)).toBeInTheDocument();
-    });
-
-    it("does not show error_detail line when absent", () => {
-      mockParams({ error: "token_exchange_failed" });
-      render(<Home />);
-      expect(screen.queryByText(/invalid_grant/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/555-0100/)).not.toBeInTheDocument();
     });
   });
 });
