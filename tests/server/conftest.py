@@ -20,3 +20,11 @@ def pubsub_push_identity(monkeypatch):
     """The webhook accepts only Claven's push subscription identity, as configured in prod."""
     monkeypatch.setenv("PUBSUB_AUDIENCE", "https://api.claven.app/webhook/gmail")
     monkeypatch.setenv("PUBSUB_PUSH_SERVICE_ACCOUNT", "claven-pubsub@claven-prod.iam.gserviceaccount.com")
+
+
+@pytest.fixture(autouse=True)
+def fresh_rate_limits():
+    """Each test starts with empty rate-limit windows."""
+    from claven.core import ratelimit
+    ratelimit.reset_all()
+    yield

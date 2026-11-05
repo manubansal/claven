@@ -732,15 +732,16 @@ Must-fix (likely to fail the assessment):
 Should-fix:
 - [x] Event-log retention: `db.log_event` trims to the newest 100 per user (`EVENT_LOG_KEEP`), as the privacy policy promises
 - [x] No email addresses in INFO+ logs: correspondents only at DEBUG, users by `user_id`, `email` dropped from the JSON formatter; `tests/unit/test_log_privacy.py` guards it. Privacy policy says logs hold message IDs and account IDs
-- [ ] Stop returning exception text to clients: `/healthz` done (#134); OAuth `error_detail` (`auth.py:183,201,236`) remains
-- [ ] Constant-time compare for `INTERNAL_API_SECRET` (`auth.py:26`, `secrets.compare_digest`)
+- [x] Stop returning exception text to clients: `/healthz` (#134); the OAuth callback redirects with an error code only, and the home page shows nothing else from the URL
+- [x] Constant-time compare for `INTERNAL_API_SECRET` (`secrets.compare_digest`)
 - [x] Disable `/docs`, `/redoc` and `/openapi.json` in prod (`server.py:154`)
 - [x] Remove `http://localhost:3000` from prod `CORS_EXTRA_ORIGINS` (`deploy.yml:98`)
-- [ ] Read-only prod DB role: revoke SELECT on `gmail_tokens` and `sent_recipients` (`scripts/create_readonly_role.sql`)
+- [x] Read-only prod DB role: `scripts/create_readonly_role.sql` revokes SELECT on `gmail_tokens` and `sent_recipients` (the role isn't in the current Neon project; recreate it with the script when needed)
 - [ ] Narrow the deployer service account roles (`scripts/setup-gcp.sh:62-74`)
 - [ ] Separate CI secrets from prod; put the prod smoke-test `SESSION_SECRET` behind a protected GitHub environment
-- [ ] Log 401s from `_get_session` and `_require_internal_auth` (IP and path, no token), and alert on spikes
-- [ ] Rate limiting on `/oauth/start`, `/api/top-senders` and `/api/me`
+- [x] Log 401s from `_get_session`, `_require_internal_auth` and the webhook: method, path and reason with event `auth_rejected`, never the credential (Cloud Run's request log has the IP)
+- [ ] Alert on spikes of `auth_rejected` and `rate_limited` (log-based metric + Cloud Monitoring alert policy)
+- [x] Rate limiting (per instance, 429 with Retry-After): `/oauth/start` 30/min per client IP, `/api/me` 120/min and `/api/top-senders` 20/min per user
 
 Nice-to-have:
 - [ ] PKCE in the OAuth flow

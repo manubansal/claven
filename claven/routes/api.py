@@ -12,7 +12,8 @@ import claven.server as _srv
 from claven.core.health import HEALTH_CODES
 from claven.core.labels import KNOWN
 from claven.core.sunset import COUNTDOWN_LABELS
-from claven.routes.auth import _get_session
+from claven.core.ratelimit import RateLimiter
+from claven.routes.auth import _enforce_rate_limit, _get_session
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +28,16 @@ def _log_health(health: dict | None, user_id: str) -> dict | None:
     return health
 
 
+# Per signed-in user per minute. The dashboard calls /api/me at most every
+# 3 seconds per tab; /api/top-senders reads up to 500 messages from Gmail.
+ME_LIMIT = RateLimiter(limit=120, window_seconds=60)
+TOP_SENDERS_LIMIT = RateLimiter(limit=20, window_seconds=60)
+
+
 @router.get("/api/me")
 def api_me(request: Request):
     session = _get_session(request)
+    _enforce_rate_limit(ME_LIMIT, session["user_id"], request)
     with _srv.db.get_connection() as conn:
         user = _srv.db.get_user_by_id(conn, session["user_id"])
         if not user:
@@ -618,6 +626,7 @@ def api_top_senders(request: Request):
     via batch API, counts by sender, returns top 10.
     """
     session = _get_session(request)
+    _enforce_rate_limit(TOP_SENDERS_LIMIT, session["user_id"], request)
     with _srv.db.get_connection() as conn:
         service = _srv.auth.get_service(conn, session["user_id"], os.environ["TOKEN_ENCRYPTION_KEY"])
 

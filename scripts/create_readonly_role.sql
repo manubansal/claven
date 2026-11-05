@@ -11,3 +11,5 @@ GRANT USAGE ON SCHEMA public TO claven_readonly;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO claven_readonly;
 -- Ensures future tables are also covered
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO claven_readonly;
+-- Except Gmail credentials and users' correspondents: debugging never needs them.
+REVOKE SELECT ON gmail_tokens, sent_recipients FROM claven_readonly;

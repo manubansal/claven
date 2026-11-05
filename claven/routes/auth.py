@@ -1,10 +1,11 @@
 """Auth helpers and OAuth/logout routes."""
 
 import logging
+import math
 import os
 import secrets
 import time
-from urllib.parse import urlencode, quote
+from urllib.parse import urlencode
 
 import jwt as pyjwt
 
@@ -14,6 +15,7 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 
 import claven.server as _srv
+from claven.core.ratelimit import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -23,13 +25,49 @@ router = APIRouter()
 SESSION_LIFETIME_SECONDS = 30 * 24 * 3600
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
+# Sign-in starts per client address per minute; a person needs a handful.
+OAUTH_START_LIMIT = RateLimiter(limit=30, window_seconds=60)
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+def _reject(request: Request, detail: str, status_code: int = 401) -> HTTPException:
+    """Log a refused request (method, path and reason, never the credential) and return the error to raise.
+
+    Cloud Run's request log has the caller's address for the same request.
+    The auth_rejected event is what a log-based alert on spikes counts.
+    """
+    logger.info("Rejected %s %s: %s", request.method, request.url.path, detail,
+                extra={"event": "auth_rejected"})
+    return HTTPException(status_code=status_code, detail=detail)
+
+
+def _client_ip(request: Request) -> str:
+    """The caller's address. Google's front end appends it to X-Forwarded-For;
+    earlier entries came from the caller and can't be trusted."""
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        logger.debug("_client_ip: from X-Forwarded-For")
+        return forwarded.rsplit(",", 1)[-1].strip()
+    logger.debug("_client_ip: from the connection")
+    return request.client.host if request.client else "unknown"
+
+
+def _enforce_rate_limit(limiter: RateLimiter, key: str, request: Request) -> None:
+    """Refuse with 429 and Retry-After once key has used up limiter's window."""
+    retry_after = limiter.hit(key)
+    if retry_after is None:
+        return
+    logger.warning("Rate limited %s %s", request.method, request.url.path, extra={"event": "rate_limited"})
+    raise HTTPException(status_code=429, detail="Too many requests",
+                        headers={"Retry-After": str(max(1, math.ceil(retry_after)))})
+
+
 def _require_internal_auth(request: Request) -> None:
-    expected = f"Bearer {os.environ['INTERNAL_API_SECRET']}"
-    if request.headers.get("Authorization") != expected:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    expected = f"Bearer {os.environ['INTERNAL_API_SECRET']}".encode()
+    supplied = request.headers.get("Authorization", "").encode()
+    if not secrets.compare_digest(supplied, expected):
+        raise _reject(request, "Unauthorized")
 
 
 def _verify_pubsub_token(request: Request) -> None:
@@ -49,7 +87,7 @@ def _verify_pubsub_token(request: Request) -> None:
 
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing Pub/Sub auth token")
+        raise _reject(request, "Missing Pub/Sub auth token")
 
     token = auth_header[len("Bearer "):]
 
@@ -113,20 +151,20 @@ def _get_session(request: Request) -> dict:
             token = auth_header[len("Bearer "):]
             logger.debug("_get_session: bearer session")
     if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        raise _reject(request, "Not authenticated")
     try:
         claims = pyjwt.decode(token, os.environ["SESSION_SECRET"], algorithms=["HS256"],
                               options={"require": ["exp", "iat"]})
     except pyjwt.PyJWTError as exc:
         logger.debug("_get_session: rejected token: %s", exc)
-        raise HTTPException(status_code=401, detail="Invalid session")
+        raise _reject(request, "Invalid session")
     if not isinstance(claims.get("sv"), int):
         logger.debug("_get_session: token has no session version")
-        raise HTTPException(status_code=401, detail="Invalid session")
+        raise _reject(request, "Invalid session")
     current = _current_session_version(claims.get("user_id"))
     if current != claims["sv"]:
         logger.debug("_get_session: session version %s, current %s", claims["sv"], current)
-        raise HTTPException(status_code=401, detail="Session revoked")
+        raise _reject(request, "Session revoked")
     return claims
 
 
@@ -163,11 +201,9 @@ def _redirect_base(request: Request) -> str:
     return frontend_url
 
 
-def _error_redirect(base: str, reason: str, detail: str | None = None) -> RedirectResponse:
-    url = f"{base}/?error={reason}"
-    if detail:
-        url += f"&error_detail={quote(detail)}"
-    response = RedirectResponse(url=url, status_code=302)
+def _error_redirect(base: str, reason: str) -> RedirectResponse:
+    """Send the browser back with an error code only; the exception stays in the logs."""
+    response = RedirectResponse(url=f"{base}/?error={reason}", status_code=302)
     response.delete_cookie("oauth_state")
     response.delete_cookie("oauth_return_to")
     return response
@@ -176,7 +212,8 @@ def _error_redirect(base: str, reason: str, detail: str | None = None) -> Redire
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.get("/oauth/start")
-def oauth_start(return_to: str | None = None, force_consent: bool = False):
+def oauth_start(request: Request, return_to: str | None = None, force_consent: bool = False):
+    _enforce_rate_limit(OAUTH_START_LIMIT, _client_ip(request), request)
     if return_to and return_to not in _srv._allowed_origins():
         raise HTTPException(status_code=400, detail="Invalid return_to")
     flow = _make_flow()
@@ -224,7 +261,7 @@ def oauth_callback(
         flow.fetch_token(code=code)
     except Exception as exc:
         logger.warning("Token exchange failed: %s", exc)
-        return _error_redirect(base, "token_exchange_failed", str(exc))
+        return _error_redirect(base, "token_exchange_failed")
     creds = flow.credentials
 
     # Google's granular permissions lets users uncheck individual scopes.
@@ -242,7 +279,7 @@ def oauth_callback(
         )
     except Exception as exc:
         logger.warning("ID token verification failed: %s", exc)
-        return _error_redirect(base, "token_verification_failed", str(exc))
+        return _error_redirect(base, "token_verification_failed")
     email = id_info["email"]
 
     try:
@@ -278,7 +315,7 @@ def oauth_callback(
     except Exception as exc:
         logger.debug("oauth_callback: signup failed for %s", email)
         logger.exception("Signup failed: %s", exc)
-        return _error_redirect(base, "signup_failed", str(exc))
+        return _error_redirect(base, "signup_failed")
 
     logger.info("OAuth complete for %s", user_id, extra={"event": "oauth_complete", "user_id": user_id})
 
