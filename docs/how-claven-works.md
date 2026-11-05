@@ -58,7 +58,7 @@ The scope can be set to **Inbox** (default — only labels inbox messages) or **
 
 ### After the initial scans
 
-**Live labeling** begins. New incoming mail is labeled automatically as it arrives via Gmail push notifications. If any scan fails or is interrupted, it automatically resumes on the next dashboard load.
+**Live labeling** begins. Claven checks for new mail every 20 minutes, so new incoming mail is labeled within about 20 minutes of arriving. If any scan fails or is interrupted, it automatically resumes on the next dashboard load.
 
 ## Inbox modes
 
@@ -67,7 +67,7 @@ The inbox mode decides what happens to unknown-sender mail after it is labeled:
 | Mode | What happens to unknown-sender mail |
 |---|---|
 | **Label only** | Stays in your inbox with its label. Nothing is archived. |
-| **Gatekeeper** (default) | Archived as soon as it is labeled. Your inbox only shows mail from people you know. |
+| **Gatekeeper** (default) | Archived as soon as it is labeled, within about 20 minutes of arriving. Your inbox only shows mail from people you know. |
 | **Sunset** | Stays in your inbox for a timer you pick (4h, 12h, 24h, or 3 days). If it is still unread and unstarred when the timer runs out, it is archived. Opening or starring it keeps it in your inbox. |
 
 Sunset gives you a chance to skim every message in your normal inbox, by sender, subject and preview, without visiting a separate label. Whatever you ignore is filed away for you.

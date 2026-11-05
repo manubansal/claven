@@ -911,76 +911,38 @@ class TestWebhookGmail:
                 )
         assert response.status_code == 400
 
-    # ── Processing ────────────────────────────────────────────────────────────
+    # ── Deferred processing ───────────────────────────────────────────────────
 
-    def test_valid_payload_unknown_user_returns_ok(self):
+    def test_valid_push_is_acknowledged_without_touching_the_database(self):
+        """Every push used to wake Neon, which bills while awake; the poll does the work instead."""
         with patch.dict("os.environ", _ENV):
-            with patch("claven.server.db") as mock_db:
-                _fake_db_ctx(mock_db)
-                mock_db.get_user_by_email.return_value = None
+            with patch("claven.server.db") as mock_db, patch("claven.server.poll_new_messages") as mock_poll:
                 with _mock_pubsub_token():
                     with TestClient(app) as client:
-                        response = client.post(
-                            "/webhook/gmail",
-                            json=_pubsub_payload(),
-                            headers=_PUBSUB_HEADERS,
-                        )
+                        mock_db.reset_mock()  # startup clears stale job flags
+                        response = client.post("/webhook/gmail", json=_pubsub_payload(history_id="200"),
+                                               headers=_PUBSUB_HEADERS)
         assert response.status_code == 200
+        mock_db.get_connection.assert_not_called()
+        mock_poll.assert_not_called()
 
-    def test_known_user_triggers_processing(self):
-        with patch.dict("os.environ", _ENV):
-            with patch("claven.server.db") as mock_db, patch("claven.server.auth") as mock_auth, patch(
-                "claven.server.poll_new_messages"
-            ) as mock_poll, patch("claven.server.build_known_senders"):
-                _fake_db_ctx(mock_db)
-                mock_db.get_user_by_email.return_value = {"id": "uid-1", "email": "user@example.com"}
-                mock_db.get_history_id.return_value = 100
-                mock_db.get_known_senders.return_value = set()
-                mock_db.get_pending_relabel_senders.return_value = []
-                mock_auth.get_service.return_value = MagicMock()
-                mock_poll.return_value = 200
-                with _mock_pubsub_token():
-                    with TestClient(app) as client:
-                        response = client.post(
-                            "/webhook/gmail",
-                            json=_pubsub_payload(history_id="200"),
-                            headers=_PUBSUB_HEADERS,
-                        )
-        assert response.status_code == 200
-        mock_poll.assert_called_once()
 
-    def test_increments_processed_count_after_webhook(self):
-        with patch.dict("os.environ", _ENV):
-            with patch("claven.server.db") as mock_db, patch("claven.server.auth") as mock_auth, patch(
-                "claven.server.poll_new_messages"
-            ) as mock_poll, patch("claven.server.build_known_senders"):
-                _fake_db_ctx(mock_db)
-                mock_db.get_user_by_email.return_value = {"id": "uid-1", "email": "user@example.com"}
-                mock_db.get_history_id.return_value = 100
-                mock_db.get_known_senders.return_value = set()
-                mock_db.get_pending_relabel_senders.return_value = []
-                mock_auth.get_service.return_value = MagicMock()
-                mock_poll.return_value = 3
-                with _mock_pubsub_token():
-                    with TestClient(app) as client:
-                        client.post(
-                            "/webhook/gmail",
-                            json=_pubsub_payload(history_id="200"),
-                            headers=_PUBSUB_HEADERS,
-                        )
-        mock_db.increment_processed_count.assert_called_once_with(ANY, "uid-1", 3)
+class TestPollProcessing:
+    """What the poll does for each user (this used to run on every Gmail push)."""
 
-    def _webhook(self, has_new, sent_status="complete", pending=(), sent_updated_at=None,
-                 inbox_status="complete", last_fetched_at=None):
+    def _poll(self, has_new, sent_status="complete", pending=(), sent_updated_at=None,
+              inbox_status="complete", last_fetched_at=None, poll_count=0, locked=False):
         self.conn = MagicMock()
         with patch.dict("os.environ", _ENV):
             with patch("claven.server.db") as mock_db, patch("claven.server.auth") as mock_auth, \
+                 patch("claven.server.get_profile", return_value={"historyId": "200"}), \
                  patch("claven.server.has_new_messages", return_value=has_new) as self.mock_has_new, \
-                 patch("claven.server.poll_new_messages", return_value=0) as mock_poll, \
+                 patch("claven.server.poll_new_messages", return_value=poll_count) as mock_poll, \
                  patch("claven.server.build_known_senders") as mock_build, \
                  patch("claven.server._spawn_scan_thread") as self.mock_spawn:
                 _fake_db_ctx(mock_db, self.conn)
-                mock_db.get_user_by_email.return_value = {"id": "uid-1", "email": "user@example.com"}
+                mock_db.get_all_users.return_value = [{"id": "uid-1", "email": "user@example.com"}]
+                mock_db.try_lock_user_scan.return_value = not locked
                 mock_db.get_history_id.return_value = 100
                 mock_db.get_sent_scan_progress.return_value = {"status": sent_status, "updated_at": sent_updated_at}
                 mock_db.get_inbox_scan_status.return_value = inbox_status
@@ -989,45 +951,49 @@ class TestWebhookGmail:
                 mock_db.get_pending_relabel_senders.return_value = list(pending)
                 mock_db.get_known_senders.return_value = set()
                 mock_auth.get_service.return_value = MagicMock()
-                with _mock_pubsub_token():
-                    with TestClient(app) as client:
-                        response = client.post("/webhook/gmail", json=_pubsub_payload(history_id="200"),
-                                               headers=_PUBSUB_HEADERS)
+                with TestClient(app) as client:
+                    response = client.post("/internal/poll", headers={"Authorization": "Bearer test-internal-secret"})
+        self.result = response.json()["results"][0]
         return response, mock_db, mock_poll, mock_build
 
+    def test_new_messages_are_processed(self):
+        _, mock_db, mock_poll, mock_build = self._poll(has_new=True)
+        mock_poll.assert_called_once()
+        mock_build.assert_called_once()
+        mock_db.set_history_id.assert_called_once_with(ANY, "uid-1", 200)
+
+    def test_increments_processed_count(self):
+        _, mock_db, _, _ = self._poll(has_new=True, poll_count=3)
+        mock_db.increment_processed_count.assert_called_once_with(ANY, "uid-1", 3)
+
     def test_label_changes_only_just_advance_history(self):
-        # Claven's own label changes on inbox mail trigger pushes; nothing was added.
-        response, mock_db, mock_poll, mock_build = self._webhook(has_new=False)
-        assert response.status_code == 200
+        # Claven's own label changes add history entries; nothing was added.
+        _, mock_db, mock_poll, mock_build = self._poll(has_new=False)
         mock_poll.assert_not_called()
         mock_build.assert_not_called()
         mock_db.set_history_id.assert_called_once_with(ANY, "uid-1", 200)
-
-    def test_new_messages_are_processed(self):
-        _, _, mock_poll, mock_build = self._webhook(has_new=True)
-        mock_poll.assert_called_once()
-        mock_build.assert_called_once()
+        assert self.result["detail"] == "no new messages"
 
     def test_new_known_senders_are_relabeled_right_away(self):
         # Replying to an unknown sender makes them known; their earlier mail
         # should move to c/k now, not on the next dashboard visit.
         with patch("claven.server.relabel_scan", return_value=2) as mock_relabel, \
              patch("claven.routes.internal.existing_countdown_ids", return_value={"c/4h": "L4"}):
-            _, mock_db, _, _ = self._webhook(has_new=True, pending=["alice@example.com"])
+            self._poll(has_new=True, pending=["alice@example.com"])
         mock_relabel.assert_called_once()
         assert mock_relabel.call_args.args[1] == "uid-1"
         assert mock_relabel.call_args.kwargs["countdown_ids"] == {"c/4h": "L4"}
 
     def test_no_relabel_without_new_known_senders(self):
         with patch("claven.server.relabel_scan") as mock_relabel:
-            self._webhook(has_new=True, pending=[])
+            self._poll(has_new=True, pending=[])
         mock_relabel.assert_not_called()
 
     def test_unfinished_sent_scan_restarts_in_the_background(self):
-        # Never inline: a full sent scan inside the webhook's transaction held
-        # the user's rows locked for minutes and stalled their dashboard.
-        response, mock_db, mock_poll, mock_build = self._webhook(has_new=True, sent_status="error.unknown")
-        assert response.json()["detail"] == "sent scan started"
+        # Never inline: a full sent scan inside the transaction held the
+        # user's rows locked for minutes and stalled their dashboard.
+        _, mock_db, mock_poll, mock_build = self._poll(has_new=True, sent_status="error.unknown")
+        assert self.result["detail"] == "sent scan started"
         mock_build.assert_not_called()
         mock_poll.assert_not_called()
         mock_db.set_sent_scan_status.assert_called_once_with(ANY, "uid-1", "in_progress")
@@ -1039,31 +1005,25 @@ class TestWebhookGmail:
         # The scan takes the scan_state row lock with SKIP LOCKED; while this
         # transaction holds it, the scan would skip itself.
         order = []
-        response = self._webhook_recording_order(order)
-        assert response.json()["detail"] == "sent scan started"
-        assert order == ["commit", "spawn"]
-
-    def _webhook_recording_order(self, order):
         with patch.dict("os.environ", _ENV):
             with patch("claven.server.db") as mock_db, patch("claven.server.auth"), \
                  patch("claven.server._spawn_scan_thread", side_effect=lambda *a: order.append("spawn")):
                 conn = MagicMock()
                 conn.commit.side_effect = lambda: order.append("commit")
                 _fake_db_ctx(mock_db, conn)
-                mock_db.get_user_by_email.return_value = {"id": "uid-1", "email": "user@example.com"}
+                mock_db.get_all_users.return_value = [{"id": "uid-1", "email": "user@example.com"}]
                 mock_db.get_history_id.return_value = 100
                 mock_db.get_sent_scan_progress.return_value = {"status": "error.unknown", "updated_at": None}
-                with _mock_pubsub_token():
-                    with TestClient(app) as client:
-                        response = client.post("/webhook/gmail", json=_pubsub_payload(history_id="200"),
-                                               headers=_PUBSUB_HEADERS)
-        return response
+                with TestClient(app) as client:
+                    response = client.post("/internal/poll", headers={"Authorization": "Bearer test-internal-secret"})
+        assert response.json()["results"][0]["detail"] == "sent scan started"
+        assert order == ["commit", "spawn"]
 
     def test_skips_while_sent_scan_runs(self):
         from datetime import datetime, timezone
-        response, mock_db, mock_poll, mock_build = self._webhook(
+        _, mock_db, mock_poll, mock_build = self._poll(
             has_new=True, sent_status="in_progress", sent_updated_at=datetime.now(timezone.utc))
-        assert response.json()["detail"] == "sent scan running"
+        assert self.result["detail"] == "sent scan running"
         mock_build.assert_not_called()
         mock_poll.assert_not_called()
         self.mock_spawn.assert_not_called()
@@ -1072,41 +1032,26 @@ class TestWebhookGmail:
         mock_db.set_history_id.assert_not_called()
 
     def test_skips_while_inbox_scan_runs(self):
-        # Every label the scan applies triggers a push; checking Gmail for each
-        # one hit the per-user rate limit and slowed the scan down.
         from datetime import datetime, timezone
-        response, mock_db, mock_poll, _ = self._webhook(
+        _, mock_db, mock_poll, _ = self._poll(
             has_new=True, inbox_status="in_progress", last_fetched_at=datetime.now(timezone.utc))
-        assert response.json()["detail"] == "inbox scan running"
+        assert self.result["detail"] == "inbox scan running"
         self.mock_has_new.assert_not_called()
         self.mock_auth.get_service.assert_not_called()
         mock_poll.assert_not_called()
         mock_db.set_history_id.assert_not_called()
 
-    def test_dead_inbox_scan_does_not_block_webhooks(self):
+    def test_dead_inbox_scan_does_not_block_processing(self):
         from datetime import datetime, timezone, timedelta
-        _, _, mock_poll, _ = self._webhook(
+        _, _, mock_poll, _ = self._poll(
             has_new=True, inbox_status="in_progress",
             last_fetched_at=datetime.now(timezone.utc) - timedelta(minutes=10))
         mock_poll.assert_called_once()
 
-    def test_webhook_skips_locked_user(self):
-        with patch.dict("os.environ", _ENV):
-            with patch("claven.server.db") as mock_db, patch("claven.server.auth"), patch(
-                "claven.server.poll_new_messages"
-            ) as mock_poll, patch("claven.server.build_known_senders"):
-                _fake_db_ctx(mock_db)
-                mock_db.get_user_by_email.return_value = {"id": "uid-1", "email": "user@example.com"}
-                mock_db.try_lock_user_scan.return_value = False
-                with _mock_pubsub_token():
-                    with TestClient(app) as client:
-                        response = client.post(
-                            "/webhook/gmail",
-                            json=_pubsub_payload(history_id="200"),
-                            headers=_PUBSUB_HEADERS,
-                        )
-        assert response.status_code == 200
-        assert response.json()["detail"] == "locked"
+    def test_skips_locked_user(self):
+        _, _, mock_poll, _ = self._poll(has_new=True, locked=True)
+        assert self.result["status"] == "skipped"
+        assert self.result["detail"] == "locked"
         mock_poll.assert_not_called()
 
 

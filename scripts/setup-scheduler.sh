@@ -50,11 +50,12 @@ create_or_update_job() {
 # Daily watch renewal at 6:00 AM UTC
 create_or_update_job "claven-renew-watches" "0 6 * * *" "${API_BASE}/internal/renew-watches"
 
-# Hourly poll fallback
-create_or_update_job "claven-poll" "0 * * * *" "${API_BASE}/internal/poll"
+# The poll labels new mail; Gmail pushes are only acknowledged. Each run wakes
+# the Neon database (Free plan: 100 CU-hours a month, suspended after 5 idle
+# minutes), and 72 runs a day use about half of that.
+create_or_update_job "claven-poll" "*/20 * * * *" "${API_BASE}/internal/poll"
 
-# Same schedule as claven-poll: each run wakes the Neon database (billed while
-# awake, suspended after 5 idle minutes), so the two jobs share one wake.
+# On the hour, which is also a poll run, so the two jobs share one wake.
 create_or_update_job "claven-sunset" "0 * * * *" "${API_BASE}/internal/sunset"
 
 echo "Scheduler jobs configured."
