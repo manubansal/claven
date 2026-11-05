@@ -10,9 +10,13 @@ def _schedules() -> dict[str, str]:
     return dict(re.findall(r'^create_or_update_job "([^"]+)" "([^"]+)"', SCRIPT.read_text(), re.M))
 
 
-def test_sunset_runs_with_the_poll():
-    """Every job run wakes the Neon database, which bills while awake. The Sunset
-    sweep shares the hourly poll's schedule so the two share one wake."""
-    schedules = _schedules()
-    assert schedules["claven-poll"] == "0 * * * *"
-    assert schedules["claven-sunset"] == schedules["claven-poll"]
+def test_poll_runs_every_20_minutes():
+    """The poll labels new mail (Gmail pushes are only acknowledged). Each run
+    wakes the Neon database for at least 5 minutes, and the Free plan allows
+    about 13 awake hours a day: 72 runs keep it near half of that."""
+    assert _schedules()["claven-poll"] == "*/20 * * * *"
+
+
+def test_sunset_runs_on_the_hour_with_the_poll():
+    """The hourly Sunset sweep lands on a poll run, so the two share one wake."""
+    assert _schedules()["claven-sunset"] == "0 * * * *"

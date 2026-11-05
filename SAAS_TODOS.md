@@ -740,7 +740,7 @@ Should-fix:
 - [ ] Narrow the deployer service account roles (`scripts/setup-gcp.sh:62-74`)
 - [ ] Separate CI secrets from prod; put the prod smoke-test `SESSION_SECRET` behind a protected GitHub environment
 - [x] Log 401s from `_get_session`, `_require_internal_auth` and the webhook: method, path and reason with event `auth_rejected`, never the credential (Cloud Run's request log has the IP)
-- [ ] Alert on spikes of `auth_rejected` and `rate_limited` (log-based metric + Cloud Monitoring alert policy)
+- [x] Alert on spikes of `auth_rejected` (>100 in 5 min) and `rate_limited` (>10 in 5 min): log-based metrics and Cloud Monitoring alert policies emailing the owner, set up 2026-11-05
 - [x] Rate limiting (per instance, 429 with Retry-After): `/oauth/start` 30/min per client IP, `/api/me` 120/min and `/api/top-senders` 20/min per user
 
 Nice-to-have:

@@ -62,6 +62,11 @@ def internal_renew_watches(request: Request):
 
 @router.post("/internal/poll")
 def internal_poll(request: Request):
+    """Label new mail for every user. Cloud Scheduler calls this every 20 minutes.
+
+    Gmail pushes only get acknowledged (see webhook_gmail): handling each one
+    woke the Neon database, which bills while awake, hundreds of times a day.
+    """
     _require_internal_auth(request)
 
     label_configs = _srv.load_config().get("labels", [])
@@ -71,55 +76,96 @@ def internal_poll(request: Request):
         users = _srv.db.get_all_users(conn)
 
     for user in users:
-        user_id = user["id"]
         with _srv.db.get_connection() as conn:
             try:
-                if not _srv.db.try_lock_user_scan(conn, user_id):
-                    results.append({"user_id": user_id, "status": "skipped", "detail": "locked"})
-                    continue
-
-                history_id = _srv.db.get_history_id(conn, user_id)
-                if not history_id:
-                    continue
-
-                service = _srv.auth.get_service(conn, user_id, os.environ["TOKEN_ENCRYPTION_KEY"])
-
-                # Reconcile: if sent scan never completed, run it now
-                scan_progress = _srv.db.get_sent_scan_progress(conn, user_id)
-                logger.debug("internal_poll: user %s sent_scan status=%s", user_id, scan_progress["status"])
-                if _srv._needs_sent_scan(scan_progress):
-                    logger.info("Reconciling sent scan for user %s (status=%s)", user_id, scan_progress["status"])
-                    _srv.db.set_sent_scan_status(conn, user_id, "in_progress")
-                    try:
-                        _srv.build_known_senders(service, conn, user_id)
-                        _srv.db.set_sent_scan_status(conn, user_id, "complete")
-                    except Exception as exc:
-                        from claven.tasks import _handle_error
-                        error_label = _handle_error(exc, user_id, "Sent scan reconciliation", conn)
-                        _srv.db.set_sent_scan_status(conn, user_id, error_label)
-
-                known_senders = _srv.db.get_known_senders(conn, user_id)
-                auto_archive = _srv.db.get_auto_archive_unknown(conn, user_id)
-
-                profile = _srv.get_profile(service)
-                latest_history_id = int(profile["historyId"])
-
-                label_id_cache = _srv._label_id_cache_for_config(service, label_configs)
-                sunset = _srv._sunset_for_live_labeling(service, conn, user_id)
-                count = _srv.poll_new_messages(service, history_id, label_configs, label_id_cache, known_senders,
-                                               auto_archive_unknown=auto_archive, sunset=sunset)
-                _srv.db.touch_last_fetched(conn, user_id)
-                _srv.db.set_history_id(conn, user_id, latest_history_id)
-                if count is not None and count > 0:
-                    _srv.db.increment_processed_count(conn, user_id, count)
-                    _srv.db.touch_last_labeled(conn, user_id)
-                results.append({"user_id": user_id, "status": "ok"})
+                result = _process_user(conn, user, label_configs)
             except Exception as exc:
                 from claven.tasks import _handle_error
-                error_label = _handle_error(exc, user_id, "Poll processing", conn)
-                results.append({"user_id": user_id, "status": "error", "detail": error_label})
+                logger.debug("internal_poll: processing failed for %s", user["id"])
+                result = {"status": "error", "detail": _handle_error(exc, user["id"], "Poll processing", conn)}
+        results.append({"user_id": user["id"], **result})
 
     return {"processed": len(results), "results": results}
+
+
+def _process_user(conn, user: dict, label_configs: list) -> dict:
+    """Label one user's mail that arrived since their stored history id.
+
+    Returns {"status": ..., "detail": ...} saying what happened.
+    """
+    user_id = user["id"]
+    if not _srv.db.try_lock_user_scan(conn, user_id):
+        logger.info("Poll for %s skipped — locked by another instance", user_id)
+        return {"status": "skipped", "detail": "locked"}
+
+    stored_history_id = _srv.db.get_history_id(conn, user_id)
+    if not stored_history_id:
+        logger.debug("_process_user: no history_id for %s", user_id)
+        return {"status": "ok", "detail": "no history_id"}
+
+    # While a scan runs, every label it applies adds history. Leave the
+    # history id alone: the label scan covers new inbox mail and sets the
+    # history id when it finishes. A full sent scan never runs here — inside
+    # this transaction it would hold the user's rows locked for minutes.
+    scan_progress = _srv.db.get_sent_scan_progress(conn, user_id)
+    if scan_progress["status"] != "complete":
+        if _srv._needs_sent_scan(scan_progress):
+            logger.info("Poll for %s: sent scan unfinished (status=%s), restarting it",
+                        user_id, scan_progress["status"])
+            _srv.db.set_sent_scan_status(conn, user_id, "in_progress")
+            # Release this transaction's scan_state lock first, or the scan's
+            # SKIP LOCKED check sees it and skips itself.
+            conn.commit()
+            _srv._spawn_scan_thread(_srv._run_sent_scan, (user_id,))
+            return {"status": "ok", "detail": "sent scan started"}
+        logger.debug("_process_user: sent scan running for %s, skipping", user_id)
+        return {"status": "ok", "detail": "sent scan running"}
+    if _srv._inbox_scan_running(_srv.db.get_inbox_scan_status(conn, user_id),
+                                _srv.db.get_last_fetched_at(conn, user_id)):
+        logger.debug("_process_user: label scan running for %s, skipping", user_id)
+        return {"status": "ok", "detail": "inbox scan running"}
+
+    logger.debug("_process_user: processing for %s (history_id=%d)", user_id, stored_history_id)
+    service = _srv.auth.get_service(conn, user_id, os.environ["TOKEN_ENCRYPTION_KEY"])
+    # Read before labeling: mail arriving meanwhile has a later id and is
+    # picked up next run (labeling is idempotent).
+    latest_history_id = int(_srv.get_profile(service)["historyId"])
+
+    # Label changes (including Claven's own) add history too; skip the work
+    # unless a message was added.
+    if not _srv.has_new_messages(service, stored_history_id):
+        logger.debug("_process_user: no new messages for %s, advancing history only", user_id)
+        _srv.db.set_history_id(conn, user_id, latest_history_id)
+        return {"status": "ok", "detail": "no new messages"}
+    # Incremental known senders update — cheap with cursor (one list_history call).
+    _srv.build_known_senders(service, conn, user_id)
+
+    known_senders = _srv.db.get_known_senders(conn, user_id)
+    auto_archive = _srv.db.get_auto_archive_unknown(conn, user_id)
+    label_id_cache = _srv._label_id_cache_for_config(service, label_configs)
+    sunset = _srv._sunset_for_live_labeling(service, conn, user_id)
+    count = _srv.poll_new_messages(service, stored_history_id, label_configs, label_id_cache, known_senders,
+                                   auto_archive_unknown=auto_archive, sunset=sunset)
+    _srv.db.touch_last_fetched(conn, user_id)
+    _srv.db.set_history_id(conn, user_id, latest_history_id)
+    if count is not None and count > 0:
+        logger.debug("_process_user: labeled %d for %s", count, user_id)
+        _srv.db.increment_processed_count(conn, user_id, count)
+        _srv.db.touch_last_labeled(conn, user_id)
+    else:
+        logger.debug("_process_user: nothing labeled for %s", user_id)
+    # Mail you just sent made its recipients known: move their earlier
+    # unknown-sender mail to known now rather than on the next dashboard
+    # visit. Runs after new mail is labeled so a failure can't hold that up;
+    # senders stay pending and are retried on the next run or visit.
+    if _srv.db.get_pending_relabel_senders(conn, user_id):
+        logger.debug("_process_user: relabeling newly known senders for %s", user_id)
+        _srv.relabel_scan(service, user_id, label_configs, label_id_cache,
+                          shutdown_event=_srv._shutdown_event,
+                          countdown_ids=existing_countdown_ids(service))
+    else:
+        logger.debug("_process_user: no newly known senders for %s", user_id)
+    return {"status": "ok", "detail": "processed"}
 
 
 @router.post("/internal/build-known-senders")
@@ -257,84 +303,8 @@ async def webhook_gmail(request: Request):
     if not email or not history_id_str:
         raise HTTPException(status_code=400, detail="Missing emailAddress or historyId")
 
-    notification_history_id = int(history_id_str)
-    label_configs = _srv.load_config().get("labels", [])
-
-    with _srv.db.get_connection() as conn:
-        user = _srv.db.get_user_by_email(conn, email)
-        if not user:
-            logger.debug("webhook_gmail: unknown user %s", email)
-            logger.info("Webhook for unknown user — acknowledging")
-            return {"status": "ok", "detail": "unknown user"}
-
-        if not _srv.db.try_lock_user_scan(conn, user["id"]):
-            logger.info("Webhook for %s skipped — locked by another instance", user["id"])
-            return {"status": "ok", "detail": "locked"}
-
-        stored_history_id = _srv.db.get_history_id(conn, user["id"])
-        if not stored_history_id:
-            logger.info("No history_id for %s — skipping", user["id"])
-            return {"status": "ok", "detail": "no history_id"}
-
-        # While a scan runs, every label it applies triggers a push. Leave the
-        # history id alone: the label scan covers new inbox mail and sets the
-        # history id when it finishes. A full sent scan never runs here — inside
-        # this transaction it would hold the user's rows locked for minutes.
-        scan_progress = _srv.db.get_sent_scan_progress(conn, user["id"])
-        if scan_progress["status"] != "complete":
-            if _srv._needs_sent_scan(scan_progress):
-                logger.info("Webhook for %s: sent scan unfinished (status=%s), restarting it",
-                            user["id"], scan_progress["status"])
-                _srv.db.set_sent_scan_status(conn, user["id"], "in_progress")
-                # Release this webhook's scan_state lock first, or the scan's
-                # SKIP LOCKED check sees it and skips itself.
-                conn.commit()
-                _srv._spawn_scan_thread(_srv._run_sent_scan, (user["id"],))
-                return {"status": "ok", "detail": "sent scan started"}
-            logger.debug("webhook_gmail: sent scan running for %s, skipping", email)
-            return {"status": "ok", "detail": "sent scan running"}
-        if _srv._inbox_scan_running(_srv.db.get_inbox_scan_status(conn, user["id"]),
-                                    _srv.db.get_last_fetched_at(conn, user["id"])):
-            logger.debug("webhook_gmail: label scan running for %s, skipping", email)
-            return {"status": "ok", "detail": "inbox scan running"}
-
-        logger.debug("webhook_gmail: processing for %s (history_id=%d)", email, stored_history_id)
-        try:
-            service = _srv.auth.get_service(conn, user["id"], os.environ["TOKEN_ENCRYPTION_KEY"])
-
-            # Pushes also fire for label changes (including Claven's own); skip
-            # the work unless a message was added.
-            if not _srv.has_new_messages(service, stored_history_id):
-                logger.debug("webhook_gmail: no new messages for %s, advancing history only", email)
-                _srv.db.set_history_id(conn, user["id"], notification_history_id)
-                return {"status": "ok", "detail": "no new messages"}
-            # Incremental known senders update — cheap with cursor (one list_history call).
-            _srv.build_known_senders(service, conn, user["id"])
-
-            known_senders = _srv.db.get_known_senders(conn, user["id"])
-            auto_archive = _srv.db.get_auto_archive_unknown(conn, user["id"])
-            label_id_cache = _srv._label_id_cache_for_config(service, label_configs)
-            sunset = _srv._sunset_for_live_labeling(service, conn, user["id"])
-            count = _srv.poll_new_messages(service, stored_history_id, label_configs, label_id_cache, known_senders,
-                                           auto_archive_unknown=auto_archive, sunset=sunset)
-            _srv.db.touch_last_fetched(conn, user["id"])
-            _srv.db.set_history_id(conn, user["id"], notification_history_id)
-            if count is not None and count > 0:
-                _srv.db.increment_processed_count(conn, user["id"], count)
-                _srv.db.touch_last_labeled(conn, user["id"])
-            # Mail you just sent made its recipients known: move their earlier
-            # unknown-sender mail to known now rather than on the next dashboard
-            # visit. Runs after new mail is labeled so a failure can't hold that up;
-            # senders stay pending and are retried on the next webhook or visit.
-            if _srv.db.get_pending_relabel_senders(conn, user["id"]):
-                logger.debug("webhook_gmail: relabeling newly known senders for %s", email)
-                _srv.relabel_scan(service, user["id"], label_configs, label_id_cache,
-                                  shutdown_event=_srv._shutdown_event,
-                                  countdown_ids=existing_countdown_ids(service))
-            else:
-                logger.debug("webhook_gmail: no newly known senders for %s", email)
-        except Exception as exc:
-            from claven.tasks import _handle_error
-            _handle_error(exc, user["id"], "Webhook", conn)
-
-    return {"status": "ok"}
+    # Acknowledge only. Handling a push needs the database, and each one woke
+    # Neon for at least five minutes; internal_poll labels the new mail within
+    # 20 minutes instead. The Gmail watch stays so pushes can be turned back on.
+    logger.debug("webhook_gmail: push for history %s acknowledged, left to the poll", history_id_str)
+    return {"status": "ok", "detail": "deferred to poll"}
