@@ -16,6 +16,9 @@ jobs:
   deploy-backend:
     name: Test, build, and deploy backend
     runs-on: ubuntu-latest
+    # Prod secrets and the GCP deploy identity are only available to jobs in
+    # this environment, which only main can deploy to.
+    environment: production
 
     # id-token:write is required for Workload Identity Federation
     permissions:
@@ -91,7 +94,9 @@ jobs:
             PUBSUB_AUDIENCE=https://api.claven.app/webhook/gmail
             PUBSUB_PUSH_SERVICE_ACCOUNT=claven-pubsub@claven-prod.iam.gserviceaccount.com
             FRONTEND_URL=https://claven.app
+          # Runs as claven-run, which can read only its own secrets.
           flags: >-
+            --service-account=claven-run@claven-prod.iam.gserviceaccount.com
             --min-instances=0
             --max-instances=10
             --concurrency=80
@@ -164,6 +169,7 @@ jobs:
   deploy-frontend:
     name: Build and deploy frontend
     runs-on: ubuntu-latest
+    environment: production
 
     steps:
       - uses: actions/checkout@v4

@@ -17,6 +17,7 @@ GITHUB_REPO="manubansal/claven"
 REGION="us-central1"
 REGISTRY="claven"
 SA_NAME="claven-deploy"
+RUN_SA_NAME="claven-run"
 POOL="github-pool"
 PROVIDER="github-provider"
 
@@ -29,6 +30,7 @@ gcloud config set project "$PROJECT_ID"
 
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
 SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+RUN_SA_EMAIL="${RUN_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 
 # ── APIs ──────────────────────────────────────────────────────────────────────
 echo ""
@@ -59,14 +61,18 @@ gcloud iam service-accounts create "$SA_NAME" \
   --display-name="Claven GitHub Deploy" 2>/dev/null \
   || echo "    (service account already exists, continuing)"
 
+echo "==> Creating runtime service account '$RUN_SA_NAME'..."
+gcloud iam service-accounts create "$RUN_SA_NAME" \
+  --display-name="Claven Cloud Run runtime" 2>/dev/null \
+  || echo "    (service account already exists, continuing)"
+
+# Least privilege. The deployer pushes images, deploys the service as
+# claven-run (and no other identity), and updates Scheduler jobs, reading only
+# the secret those jobs send. Secrets, Pub/Sub and IAM are managed by hand.
 echo "==> Granting IAM roles to $SA_EMAIL..."
 for ROLE in \
-  roles/run.admin \
+  roles/run.developer \
   roles/artifactregistry.writer \
-  roles/secretmanager.secretAccessor \
-  roles/secretmanager.admin \
-  roles/iam.serviceAccountUser \
-  roles/pubsub.admin \
   roles/cloudscheduler.admin; do
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member="serviceAccount:${SA_EMAIL}" \
@@ -74,6 +80,9 @@ for ROLE in \
     --condition=None \
     --quiet
 done
+
+gcloud iam service-accounts add-iam-policy-binding "$RUN_SA_EMAIL" \
+  --member="serviceAccount:${SA_EMAIL}" --role="roles/iam.serviceAccountUser" --quiet
 
 # ── Workload Identity Federation ──────────────────────────────────────────────
 echo ""
@@ -89,7 +98,8 @@ gcloud iam workload-identity-pools providers create-oidc "$PROVIDER" \
   --workload-identity-pool="$POOL" \
   --display-name="GitHub Actions OIDC" \
   --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository" \
-  --issuer-uri="https://token.actions.githubusercontent.com" 2>/dev/null \
+  --issuer-uri="https://token.actions.githubusercontent.com" \
+  --attribute-condition="assertion.repository == '${GITHUB_REPO}' && assertion.environment == 'production'" 2>/dev/null \
   || echo "    (provider already exists, continuing)"
 
 echo "==> Binding service account to pool (repo: $GITHUB_REPO)..."
@@ -102,11 +112,16 @@ gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
 #   echo -n "actual-value" | gcloud secrets versions add SECRET_NAME --data-file=-
 echo ""
 echo "==> Creating Secret Manager secrets (empty — update values separately)..."
-for SECRET in database-url token-encryption-key oauth-client-secret; do
+for SECRET in database-url database-url-direct token-encryption-key oauth-client-secret internal-api-secret session-secret; do
   gcloud secrets create "$SECRET" \
     --replication-policy="automatic" 2>/dev/null \
     || echo "    (secret '$SECRET' already exists, continuing)"
+  # The runtime reads each of its secrets; nothing else gets project-wide access.
+  gcloud secrets add-iam-policy-binding "$SECRET" \
+    --member="serviceAccount:${RUN_SA_EMAIL}" --role="roles/secretmanager.secretAccessor" --quiet >/dev/null
 done
+gcloud secrets add-iam-policy-binding internal-api-secret \
+  --member="serviceAccount:${SA_EMAIL}" --role="roles/secretmanager.secretAccessor" --quiet >/dev/null
 
 # ── Output ────────────────────────────────────────────────────────────────────
 PROVIDER_FULL="projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL}/providers/${PROVIDER}"
